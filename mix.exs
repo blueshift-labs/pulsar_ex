@@ -1,9 +1,9 @@
-defmodule PulserlExample.MixProject do
+defmodule PulsarEx.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :pulserl_example,
+      app: :pulsar_ex,
       version: "0.1.0",
       elixir: "~> 1.11",
       start_permanent: Mix.env() == :prod,
@@ -15,14 +15,16 @@ defmodule PulserlExample.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {PulserlExample.Application, []}
+      mod: {PulsarEx.Application, []}
     ]
   end
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:pulserl, path: "../pulserl"}
+      {:pulserl, path: "../pulserl"},
+      {:timex, "~> 3.0"},
+      {:logger_json, "~> 4.0"}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]

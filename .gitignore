@@ -20,8 +20,14 @@ erl_crash.dump
 *.ez
 
 # Ignore package tarball (built via "mix hex.build").
-pulserl_example-*.tar
+pulsar_ex-*.tar
 
 
 # Temporary files for e.g. tests
 /tmp
+
+tags
+
+.DS_Store
+
+*.swp
