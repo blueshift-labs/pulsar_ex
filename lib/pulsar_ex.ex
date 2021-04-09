@@ -15,4 +15,8 @@ defmodule PulsarEx do
 
   defdelegate start_consumers(topic, subscription, opts), to: PulsarEx.Application
   defdelegate stop_consumers(topic, subscription), to: PulsarEx.Application
+
+  def produce(topic, payload, options \\ []) do
+    :pulserl.produce(topic, payload, options)
+  end
 end

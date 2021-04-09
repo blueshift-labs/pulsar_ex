@@ -2,7 +2,7 @@ defmodule PulsarEx.Consumer do
   @moduledoc false
   use GenServer
 
-  alias PulsarEx.{ConsumerRegistry}
+  alias PulsarEx.{ConsumerRegistry, Pulserl.Structures, Pulserl.Structures.ConsumerMessage}
 
   def start_link(args) do
     GenServer.start_link(__MODULE__, args)
@@ -62,9 +62,10 @@ defmodule PulsarEx.Consumer do
             Process.send_after(self(), :poll, poll_interval)
             {:noreply, state}
 
-          # TODO: pattern match the message
           msg ->
-            unprocessed_messages = :lists.append(unprocessed_messages, [msg])
+            unprocessed_messages =
+              :lists.append(unprocessed_messages, [Structures.to_struct(msg)])
+
             Process.send(self(), :poll, [])
             {:noreply, %{state | unprocessed_messages: unprocessed_messages}}
         end
@@ -87,23 +88,20 @@ defmodule PulsarEx.Consumer do
 
   defp flush(
          %{
-           pid: _pid,
            callback_module: callback_module,
            unprocessed_messages: unprocessed_messages
          } = state
        ) do
     try do
-      # acks =
       callback_module.handle_messages(unprocessed_messages, state)
       |> Enum.map(fn
-        {msg, :ack} ->
-          {msg, :pulserl.ack(msg)}
+        {%Structures.ConsumerMessage{id: id, consumer: consumer}, :ack} ->
+          :pulserl.ack(consumer, id)
 
-        {msg, :nack} ->
-          {msg, :pulserl.nack(msg)}
+        {%Structures.ConsumerMessage{id: id, consumer: consumer}, :nack} ->
+          :pulserl.nack(consumer, id)
       end)
 
-      # TODO some error handling
       :ok
     rescue
       err ->

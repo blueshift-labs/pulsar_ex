@@ -1,8 +1,8 @@
 defmodule PulsarEx.ConsumerCallback do
-  @type properties :: %{String.t() => String.t()}
+  alias PulsarEx.Pulserl.Structures.ConsumerMessage
   @type state :: map()
 
   @moduledoc """
   """
-  @callback handle_messages(list(), state()) :: [{any(), :ack | :nack}]
+  @callback handle_messages([%ConsumerMessage{}], state()) :: [{%ConsumerMessage{}, :ack | :nack}]
 end
