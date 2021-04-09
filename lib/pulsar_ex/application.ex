@@ -31,10 +31,7 @@ defmodule PulsarEx.Application do
     Registry.lookup(PulsarEx.ConsumerRegistry, {topic, subscription})
   end
 
-  def start_consumers(topic, subscription, options) do
-    opts = options
-    {callback_module, opts} = Keyword.pop!(opts, :callback_module)
-
+  def start_consumers(topic, subscription, callback_module, opts) do
     behaviours =
       callback_module.module_info[:attributes]
       |> Keyword.pop_values(:behaviour)
@@ -54,7 +51,7 @@ defmodule PulsarEx.Application do
     Logger.info("Starting pulserl consumer",
       topic: topic,
       subscription: subscription,
-      options: options
+      opts: opts
     )
 
     {:ok, consumer} = :pulserl_instance_registry.get_consumer(topic, subscription, opts)
@@ -72,7 +69,7 @@ defmodule PulsarEx.Application do
         "Subscribing to key_shared partitioned topics, setting workers to be the same as partitions",
         topic: topic,
         subscription: subscription,
-        options: options
+        opts: opts
       )
 
       partitions
@@ -81,7 +78,7 @@ defmodule PulsarEx.Application do
           Logger.info("Starting partitioned consumer worker #{elem(&1, 0)}",
             topic: topic,
             subscription: subscription,
-            options: options
+            opts: opts
           )
 
           DynamicSupervisor.start_child(
@@ -99,7 +96,7 @@ defmodule PulsarEx.Application do
             Logger.info("Starting consumer worker #{&1}",
               topic: topic,
               subscription: subscription,
-              options: options
+              opts: opts
             )
 
             DynamicSupervisor.start_child(

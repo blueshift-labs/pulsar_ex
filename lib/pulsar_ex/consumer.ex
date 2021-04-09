@@ -2,7 +2,7 @@ defmodule PulsarEx.Consumer do
   @moduledoc false
   use GenServer
 
-  alias PulsarEx.{ConsumerRegistry, Pulserl.Structures, Pulserl.Structures.ConsumerMessage}
+  alias PulsarEx.{ConsumerRegistry, Pulserl.Structures}
 
   def start_link(args) do
     GenServer.start_link(__MODULE__, args)
@@ -93,6 +93,7 @@ defmodule PulsarEx.Consumer do
          } = state
        ) do
     try do
+      # It's ok to send out many ack/nacks because the actual consumer will batch them
       callback_module.handle_messages(unprocessed_messages, state)
       |> Enum.map(fn
         {%Structures.ConsumerMessage{id: id, consumer: consumer}, :ack} ->
