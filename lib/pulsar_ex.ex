@@ -65,8 +65,14 @@ defmodule PulsarEx do
 
   defdelegate stop_consumers(topic, subscription), to: PulsarEx.Application
 
+  @produce_timeout 3_000
+
   @doc """
-  ## Asynchronously produce message to pulsar, with default producer options
+  ## Synchronously produce message to pulsar, with default producer options
+  #  Beging able to asynchronously send messages to pulsar is awesome, but without able to catch the
+  #  errors sucks. So this sync version uses the async send, but wait for the batched/async sends to return
+  #  with result.
+  #
   ## Example Producer Configs:
   ```
      config :pulserl,
@@ -92,9 +98,29 @@ defmodule PulsarEx do
   #  batch_max_delay_ms = 10 :: non_neg_integer()
   #  max_pending_requests = 50000 :: non_neg_integer()
   #  max_pending_requests_across_partitions = 100000 :: non_neg_integer()
+
+  ## Available PulsarEx options:
+  # timeout = 3000,
+  #   Timeout value for successfully send out the message to broker
   """
   def produce(topic, payload),
     do: produce(topic, payload, Application.get_env(:pulserl, :producer_opts, []))
 
-  defdelegate produce(topic, subscription, message_opts), to: :pulserl
+  def produce(topic, payload, message_opts) do
+    timeout = Keyword.get(message_opts, :timeout, @produce_timeout)
+    pid = self()
+
+    :pulserl.produce(
+      topic,
+      :pulserl_producer.new_message(payload, message_opts),
+      &send(pid, &1)
+    )
+
+    receive do
+      msgID -> msgID
+    after
+      timeout ->
+        {:error, :timeout}
+    end
+  end
 end
