@@ -7,7 +7,16 @@ defmodule PulsarEx.MixProject do
       version: "0.1.0",
       elixir: "~> 1.11",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      test_paths: test_paths(Mix.env()),
+      aliases: aliases(),
+      description: "Elixir client for Apache Pulsar, wrapped around erlang client pulserl"
+    ]
+  end
+
+  defp aliases do
+    [
+      test: "test --no-start"
     ]
   end
 
@@ -19,15 +28,26 @@ defmodule PulsarEx.MixProject do
     ]
   end
 
+  defp test_paths(:integration), do: ["test/integration"]
+  defp test_paths(_), do: ["test/unit"]
+
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
       {:pulserl, path: "../pulserl"},
       {:timex, "~> 3.0"},
       {:logger_json, "~> 4.0"},
-      {:rec_struct, "~> 0.3.0"}
-      # {:dep_from_hexpm, "~> 0.3.0"},
-      # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
+      {:rec_struct, "~> 0.3.0"},
+      {:credo, "~> 1.5", only: [:dev], runtime: false},
+      {:divo, "~> 1.3", only: [:test, :integration], override: true},
+      {:divo_pulsar,
+       git: "https://github.com/blueshift-labs/divo_pulsar.git",
+       tag: "0.2.1",
+       only: [:test, :integration]},
+      {:propcheck, "~> 1.3", only: [:test, :dev, :integration]},
+      {:stream_data, "~> 0.5", only: [:test, :integration]}
+      # {:elixir_uuid, "~> 1.2", only: [:dev, :integration]}
+      # {:ex_doc, "~> 0.23", only: :dev, runtime: false}
     ]
   end
 end

@@ -7,7 +7,7 @@ defmodule PulsarEx.Application do
   require Logger
 
   @default_batch_size 1
-  @default_poll_interval 1_000
+  @default_poll_interval 100
   @default_workers 1
   @default_subscription_type :shared
 

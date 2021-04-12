@@ -17,6 +17,7 @@ defmodule PulsarEx do
       iex> end
       iex>
       iex> PulsarEx.start_consumers("test-topic", "test-subscription", ExampleCallback)
+      iex> PulsarEx.stop_consumers("test-topic", "test-subscription")
 
   ## Available pulserl options:
   #  consumer_name :: string()
@@ -44,8 +45,8 @@ defmodule PulsarEx do
   #   The module that implements PulsarEx.ConsumerCallback
   # batch_size = 1 :: non_neg_integer(),
   #   Always consume the messages in batch, indicate the size of each batch, defaults to 1
-  # poll_interval = 1_000,
-  #   How often to poll next batch, defaults to 1 second
+  # poll_interval = 100,
+  #   How often to poll next batch, defaults to 100 milliseconds
   # workers = 1,
   #   Number of workers to work on messages, default to 1.
   #   Note in the case of consuming from partitioned topics and with key_shared subscription,
@@ -69,9 +70,9 @@ defmodule PulsarEx do
 
   @doc """
   ## Synchronously produce message to pulsar, with default producer options
-  #  Beging able to asynchronously send messages to pulsar is awesome, but without able to catch the
+  #  Being able to asynchronously send messages to pulsar is awesome, but being not able to catch the
   #  errors sucks. So this sync version uses the async send, but wait for the batched/async sends to return
-  #  with result.
+  #  with result, pretty much like a future.
   #
   ## Example Producer Configs:
   ```
@@ -99,14 +100,16 @@ defmodule PulsarEx do
   #  max_pending_requests = 50000 :: non_neg_integer()
   #  max_pending_requests_across_partitions = 100000 :: non_neg_integer()
 
-  ## Available PulsarEx options:
+  ## Available PulsarEx message options:
   # timeout = 3000,
   #   Timeout value for successfully send out the message to broker
+  # partition_key, ordering_key :: string()
+  # event_time :: non_neg_integer()
+  # properties :: %{string() => string()} | [{string(), string()}]
+  # deliver_at_time :: non_neg_integer(),
+  #   For delayed message delivery
   """
-  def produce(topic, payload),
-    do: produce(topic, payload, Application.get_env(:pulserl, :producer_opts, []))
-
-  def produce(topic, payload, message_opts) do
+  def produce(topic, payload, message_opts \\ []) do
     timeout = Keyword.get(message_opts, :timeout, @produce_timeout)
     pid = self()
 
@@ -117,7 +120,7 @@ defmodule PulsarEx do
     )
 
     receive do
-      msgID -> msgID
+      {:messageId, _, _, _, _, _} = msg_id -> msg_id
     after
       timeout ->
         {:error, :timeout}
