@@ -2,6 +2,8 @@ defmodule PulsarEx.Consumer do
   @moduledoc false
   use GenServer
 
+  require Logger
+
   alias PulsarEx.{ConsumerRegistry, Pulserl.Structures}
 
   def start_link(args) do
@@ -10,8 +12,6 @@ defmodule PulsarEx.Consumer do
 
   @impl true
   def init([pid, topic, subscription, %{poll_interval: poll_interval} = opts]) do
-    Process.flag(:trap_exit, true)
-
     Process.send_after(self(), :poll, poll_interval)
 
     Registry.register(ConsumerRegistry, {topic, subscription}, opts)
@@ -36,39 +36,37 @@ defmodule PulsarEx.Consumer do
           unprocessed_messages: unprocessed_messages
         } = state
       ) do
-    cond do
-      can_flush?(state) ->
-        case flush(state) do
-          :ok ->
-            Process.send(self(), :poll, [])
+    if can_flush?(state) do
+      case flush(state) do
+        :ok ->
+          Process.send(self(), :poll, [])
 
-            {:noreply, %{state | unprocessed_messages: [], last_flushed_at: Timex.now()}}
+          {:noreply, %{state | unprocessed_messages: [], last_flushed_at: Timex.now()}}
 
-          {:error, err} ->
-            IO.inspect(err)
-            Process.send_after(self(), :poll, poll_interval)
+        {:error, err} ->
+          Logger.error("Error flushing in pulsar consumer #{inspect(err)}", state: state)
 
-            {:noreply, state}
-        end
+          Process.send_after(self(), :poll, poll_interval)
+          {:noreply, state}
+      end
+    else
+      case :pulserl.consume(pid, subscription) do
+        false ->
+          Process.send_after(self(), :poll, poll_interval)
+          {:noreply, state}
 
-      true ->
-        case :pulserl.consume(pid, subscription) do
-          false ->
-            Process.send_after(self(), :poll, poll_interval)
-            {:noreply, state}
+        {:error, err} ->
+          Logger.error("Error receiving message in pulserl consumer #{inspect(err)}", state: state)
 
-          {:error, err} ->
-            IO.inspect(err)
-            Process.send_after(self(), :poll, poll_interval)
-            {:noreply, state}
+          Process.send_after(self(), :poll, poll_interval)
+          {:noreply, state}
 
-          msg ->
-            unprocessed_messages =
-              :lists.append(unprocessed_messages, [Structures.to_struct(msg)])
+        msg ->
+          unprocessed_messages = :lists.append(unprocessed_messages, [Structures.to_struct(msg)])
 
-            Process.send(self(), :poll, [])
-            {:noreply, %{state | unprocessed_messages: unprocessed_messages}}
-        end
+          Process.send(self(), :poll, [])
+          {:noreply, %{state | unprocessed_messages: unprocessed_messages}}
+      end
     end
   end
 
@@ -97,22 +95,17 @@ defmodule PulsarEx.Consumer do
       callback_module.handle_messages(unprocessed_messages, state)
       |> Enum.map(fn
         {%Structures.ConsumerMessage{id: id, consumer: consumer}, :ack} ->
-          :pulserl.ack(consumer, id)
+          Task.async(fn -> :pulserl.ack(consumer, id) end)
 
         {%Structures.ConsumerMessage{id: id, consumer: consumer}, :nack} ->
-          :pulserl.nack(consumer, id)
+          Task.async(fn -> :pulserl.nack(consumer, id) end)
       end)
+      |> Task.await_many()
 
       :ok
     rescue
       err ->
         {:error, err}
     end
-  end
-
-  @impl true
-  def terminate(_reason, state) do
-    # we don't flush the messages, assuming they will be redelivered by broker
-    state
   end
 end
