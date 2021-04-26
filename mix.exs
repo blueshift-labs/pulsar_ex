@@ -34,7 +34,7 @@ defmodule PulsarEx.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:pulserl, git: "https://github.com/blueshift-labs/pulserl.git", tag: "0.1.1"},
+      {:pulserl, git: "https://github.com/blueshift-labs/pulserl.git", tag: "0.1.3"},
       {:timex, "~> 3.0"},
       {:logger_json, "~> 4.0"},
       {:rec_struct, "~> 0.3.0"},

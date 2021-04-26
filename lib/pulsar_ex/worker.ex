@@ -24,6 +24,13 @@ defmodule PulsarEx.Worker do
       @subscription subscription
       @jobs jobs
       @worker_opts worker_opts
+      @default_opts [
+        # by default, we batch the acks
+        acknowledgment_timeout: 1_000,
+        # by default, we send the message back to end of the topic
+        dead_letter_topic_name: topic,
+        dead_letter_topic_max_redeliver_count: 5
+      ]
 
       @spec enqueue_job(job :: atom(), params :: map(), message_opts :: keyword()) ::
               :ok | {:error, :timeout}
@@ -51,7 +58,11 @@ defmodule PulsarEx.Worker do
       def init(opts) do
         Process.flag(:trap_exit, true)
 
-        opts = Keyword.merge(@worker_opts, opts ++ [batch_size: 1, initial_position: :earliest])
+        opts =
+          @default_opts
+          |> Keyword.merge(@worker_opts)
+          |> Keyword.merge(opts ++ [batch_size: 1, initial_position: :earliest])
+
         PulsarEx.start_consumers(@topic, @subscription, __MODULE__, opts)
         {:ok, opts}
       end

@@ -114,7 +114,7 @@ defmodule PulsarEx.Consumer do
           end)
           |> Task.await_many()
 
-          :ok
+          {:ok, %{topic: topic, subscription: subscription}}
         end
       )
     rescue
