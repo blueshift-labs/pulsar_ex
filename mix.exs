@@ -38,6 +38,7 @@ defmodule PulsarEx.MixProject do
       {:timex, "~> 3.0"},
       {:logger_json, "~> 4.0"},
       {:rec_struct, "~> 0.3.0"},
+      {:telemetry, "~> 0.4"},
       {:credo, "~> 1.5", only: [:dev], runtime: false},
       {:divo, "~> 1.3", only: [:test, :integration], override: true},
       {:divo_pulsar,

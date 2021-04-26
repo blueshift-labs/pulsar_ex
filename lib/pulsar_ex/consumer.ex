@@ -31,6 +31,7 @@ defmodule PulsarEx.Consumer do
         :poll,
         %{
           pid: pid,
+          topic: topic,
           subscription: subscription,
           poll_interval: poll_interval,
           unprocessed_messages: unprocessed_messages
@@ -40,7 +41,6 @@ defmodule PulsarEx.Consumer do
       case flush(state) do
         :ok ->
           Process.send(self(), :poll, [])
-
           {:noreply, %{state | unprocessed_messages: [], last_flushed_at: Timex.now()}}
 
         {:error, err} ->
@@ -57,6 +57,12 @@ defmodule PulsarEx.Consumer do
 
         {:error, err} ->
           Logger.error("Error receiving message in pulserl consumer #{inspect(err)}", state: state)
+
+          :telemetry.execute(
+            [:pulsar, :receive, :error],
+            %{count: 1},
+            %{topic: topic, subscription: subscription, error: err}
+          )
 
           Process.send_after(self(), :poll, poll_interval)
           {:noreply, state}
@@ -86,23 +92,31 @@ defmodule PulsarEx.Consumer do
 
   defp flush(
          %{
+           topic: topic,
+           subscription: subscription,
            callback_module: callback_module,
            unprocessed_messages: unprocessed_messages
          } = state
        ) do
     try do
-      # It's ok to send out many ack/nacks because the actual consumer will batch them
-      callback_module.handle_messages(unprocessed_messages, state)
-      |> Enum.map(fn
-        {:ack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
-          Task.async(fn -> :pulserl.ack(consumer, id) end)
+      :telemetry.span(
+        [:pulsar, :handle_messages],
+        %{topic: topic, subscription: subscription},
+        fn ->
+          # It's ok to send out many ack/nacks because the actual consumer will batch them
+          callback_module.handle_messages(unprocessed_messages, state)
+          |> Enum.map(fn
+            {:ack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
+              Task.async(fn -> :pulserl.ack(consumer, id) end)
 
-        {:nack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
-          Task.async(fn -> :pulserl.nack(consumer, id) end)
-      end)
-      |> Task.await_many()
+            {:nack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
+              Task.async(fn -> :pulserl.nack(consumer, id) end)
+          end)
+          |> Task.await_many()
 
-      :ok
+          :ok
+        end
+      )
     rescue
       err ->
         {:error, err}
