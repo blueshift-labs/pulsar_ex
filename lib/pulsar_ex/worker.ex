@@ -46,8 +46,23 @@ defmodule PulsarEx.Worker do
           Keyword.put(message_opts, :properties, properties)
         )
         |> case do
-          {:messageId, _, _, _, _, _} -> :ok
-          other -> other
+          {:messageId, _, _, _, _, _} ->
+            :telemetry.execute(
+              [:pulsar, :worker, :enqueue, :success, :count],
+              %{count: 1},
+              %{job: job, topic: @topic}
+            )
+
+            :ok
+
+          {:error, :timeout} ->
+            :telemetry.execute(
+              [:pulsar, :worker, :enqueue, :timeout, :count],
+              %{count: 1},
+              %{job: job, topic: @topic}
+            )
+
+            {:error, :timeout}
         end
       end
 
@@ -80,10 +95,34 @@ defmodule PulsarEx.Worker do
             [%ConsumerMessage{properties: %{"job" => job}, payload: payload} = msg],
             _state
           ) do
-        case handle_job(job |> String.to_atom(), Jason.decode!(payload)) do
-          :ok -> [{:ack, msg}]
-          _ -> [{:nack, msg}]
-        end
+        job = String.to_atom(job)
+        metadata = %{job: job, topic: @topic, subscription: @subscription}
+
+        :telemetry.span(
+          [:pulsar, :handle_job],
+          metadata,
+          fn ->
+            case handle_job(job, Jason.decode!(payload)) do
+              :ok ->
+                :telemetry.execute(
+                  [:pulsar, :handle_job, :success, :count],
+                  %{count: 1},
+                  metadata
+                )
+
+                {[{:ack, msg}], metadata}
+
+              _ ->
+                :telemetry.execute(
+                  [:pulsar, :handle_job, :error, :count],
+                  %{count: 1},
+                  metadata
+                )
+
+                {[{:nack, msg}], metadata}
+            end
+          end
+        )
       end
     end
   end
