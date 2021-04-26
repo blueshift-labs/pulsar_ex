@@ -37,7 +37,7 @@ defmodule PulsarExTest do
         |> Enum.map(fn %ConsumerMessage{} = msg ->
           send(@compiled_pid, {:test_callback, msg})
 
-          {msg, :ack}
+          {:ack, msg}
         end)
       end
     end
@@ -83,7 +83,7 @@ defmodule PulsarExTest do
           send(@compiled_pid, {:test_callback, msg})
           send(@compiled_pid, {:receiver_ts, :os.system_time(:millisecond)})
 
-          {msg, :ack}
+          {:ack, msg}
         end)
       end
     end

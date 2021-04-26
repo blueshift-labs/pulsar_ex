@@ -12,7 +12,7 @@ defmodule PulsarEx do
       iex>   @behaviour PulsarEx.ConsumerCallback
       iex>
       iex>   def handle_messages(msgs, _state) do
-      iex>     msgs |> Enum.map(&{IO.inspect(&1), :ack})
+      iex>     msgs |> Enum.map(&{:ack, IO.inspect(&1)})
       iex>   end
       iex> end
       iex>
@@ -83,7 +83,7 @@ defmodule PulsarEx do
        ]
   ```
   ## Examples
-      iex> PulsarEx.produce("test-topic", "test-subscription", event_time: :os.system_time(:millisecond))
+      iex> PulsarEx.produce("test-topic", "test-payload", event_time: :os.system_time(:millisecond))
 
   ## Default pulserl producer options are picked up from configs:
   #  producer_name :: string()

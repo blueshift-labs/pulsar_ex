@@ -94,10 +94,10 @@ defmodule PulsarEx.Consumer do
       # It's ok to send out many ack/nacks because the actual consumer will batch them
       callback_module.handle_messages(unprocessed_messages, state)
       |> Enum.map(fn
-        {%Structures.ConsumerMessage{id: id, consumer: consumer}, :ack} ->
+        {:ack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
           Task.async(fn -> :pulserl.ack(consumer, id) end)
 
-        {%Structures.ConsumerMessage{id: id, consumer: consumer}, :nack} ->
+        {:nack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
           Task.async(fn -> :pulserl.nack(consumer, id) end)
       end)
       |> Task.await_many()
