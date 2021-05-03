@@ -29,7 +29,9 @@ defmodule PulsarEx.Worker do
         acknowledgment_timeout: 1_000,
         # by default, we send the message back to end of the topic
         dead_letter_topic_name: topic,
-        dead_letter_topic_max_redeliver_count: 5
+        dead_letter_topic_max_redeliver_count: 5,
+        # using pulsar as a message queue expects each job to take longer, while more consumers to distribute the load
+        queue_size: 10
       ]
 
       @spec enqueue_job(job :: atom(), params :: map(), message_opts :: keyword()) ::
