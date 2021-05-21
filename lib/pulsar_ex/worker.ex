@@ -1,7 +1,7 @@
 defmodule PulsarEx.Worker do
   def compile_config(module, opts) do
     {otp_app, opts} = Keyword.pop!(opts, :otp_app)
-    opts = Application.fetch_env!(otp_app, module) |> Keyword.merge(opts)
+    opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
     {topic, opts} = Keyword.pop!(opts, :topic)
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
@@ -14,7 +14,7 @@ defmodule PulsarEx.Worker do
       @behaviour PulsarEx.ConsumerCallback
       @behaviour PulsarEx.Worker.Callback
 
-      alias PulsarEx.Pulserl.Structures.ConsumerMessage
+      alias Pulserl.Header.Structures.ConsumerMessage
 
       {otp_app, topic, subscription, jobs, worker_opts} =
         PulsarEx.Worker.compile_config(__MODULE__, opts)

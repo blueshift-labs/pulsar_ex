@@ -4,7 +4,8 @@ defmodule PulsarEx.Consumer do
 
   require Logger
 
-  alias PulsarEx.{ConsumerRegistry, Pulserl.Structures}
+  alias PulsarEx.ConsumerRegistry
+  alias Pulserl.Header.Structures
 
   def start_link(args) do
     GenServer.start_link(__MODULE__, args)

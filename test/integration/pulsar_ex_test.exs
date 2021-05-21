@@ -30,7 +30,7 @@ defmodule PulsarExTest do
     defmodule TestCallback do
       @behaviour PulsarEx.ConsumerCallback
       @compiled_pid self()
-      alias PulsarEx.Pulserl.Structures.ConsumerMessage
+      alias Pulserl.Header.Structures.ConsumerMessage
 
       def handle_messages(msgs, _state) do
         msgs
@@ -60,7 +60,7 @@ defmodule PulsarExTest do
     Process.sleep(2_000)
 
     assert_receive {:test_callback,
-                    %PulsarEx.Pulserl.Structures.ConsumerMessage{
+                    %Pulserl.Header.Structures.ConsumerMessage{
                       partition_key: ^partition_key,
                       ordering_key: ^ordering_key,
                       event_time: ^event_time,
@@ -75,7 +75,7 @@ defmodule PulsarExTest do
     defmodule TestCallback do
       @behaviour PulsarEx.ConsumerCallback
       @compiled_pid self()
-      alias PulsarEx.Pulserl.Structures.ConsumerMessage
+      alias Pulserl.Header.Structures.ConsumerMessage
 
       def handle_messages(msgs, _state) do
         msgs
@@ -106,7 +106,7 @@ defmodule PulsarExTest do
              )
 
     assert_receive {:test_callback,
-                    %PulsarEx.Pulserl.Structures.ConsumerMessage{
+                    %Pulserl.Header.Structures.ConsumerMessage{
                       partition_key: ^partition_key,
                       ordering_key: ^ordering_key,
                       event_time: ^event_time,

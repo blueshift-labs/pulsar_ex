@@ -1,5 +1,5 @@
 defmodule PulsarEx.ConsumerCallback do
-  alias PulsarEx.Pulserl.Structures.ConsumerMessage
+  alias Pulserl.Header.Structures.ConsumerMessage
   @type state :: map()
 
   @moduledoc """

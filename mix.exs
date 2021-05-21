@@ -4,12 +4,13 @@ defmodule PulsarEx.MixProject do
   def project do
     [
       app: :pulsar_ex,
-      version: "0.1.0",
+      version: "0.1.2",
       elixir: "~> 1.11",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       test_paths: test_paths(Mix.env()),
       aliases: aliases(),
+      package: package(),
       description: "Elixir client for Apache Pulsar, wrapped around erlang client pulserl"
     ]
   end
@@ -20,7 +21,6 @@ defmodule PulsarEx.MixProject do
     ]
   end
 
-  # Run "mix help compile.app" to learn about applications.
   def application do
     [
       extra_applications: [:logger],
@@ -31,10 +31,9 @@ defmodule PulsarEx.MixProject do
   defp test_paths(:integration), do: ["test/integration"]
   defp test_paths(_), do: ["test/unit"]
 
-  # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:pulserl, git: "https://github.com/blueshift-labs/pulserl.git", tag: "0.1.3"},
+      {:pulserl, git: "https://github.com/blueshift-labs/pulserl.git", tag: "0.1.3", only: [:dev, :test]},
       {:timex, "~> 3.0"},
       {:logger_json, "~> 4.0"},
       {:rec_struct, "~> 0.3.0"},
@@ -46,7 +45,16 @@ defmodule PulsarEx.MixProject do
        tag: "0.2.1",
        only: [:test, :integration]},
       {:stream_data, "~> 0.5", only: [:test, :integration]},
-      {:dialyxir, "~> 1.1.0", only: :dev, runtime: false}
+      {:dialyxir, "~> 1.1.0", only: :dev, runtime: false},
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
+    ]
+  end
+
+  defp package() do
+    [
+      files: ~w(lib include .formatter.exs mix.exs README* LICENSE*),
+      licenses: ~w(MIT),
+      links: %{"GitHub" => "https://github.com/blueshift-labs/pulsar_ex"}
     ]
   end
 end

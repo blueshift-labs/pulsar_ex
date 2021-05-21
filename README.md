@@ -1,21 +1,20 @@
 # PulsarEx
 
-**TODO: Add description**
+**Not recommended for production just yet
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `pulsar_ex` to your list of dependencies in `mix.exs`:
+##### You'll notice you need to pull in a modified fork of pulserl for this package to work. (Hex only allows other hex packages as dependencies and the pulserl dep isn't ready to be published)
 
 ```elixir
 def deps do
   [
-    {:pulsar_ex, "~> 0.1.0"}
+    {
+     :pulserl,
+     git: "https://github.com/blueshift-labs/pulserl.git",
+     tag: "0.1.3",
+    },
+    {:pulsar_ex, "~> 0.1"}
   ]
 end
 ```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at [https://hexdocs.pm/pulsar_ex](https://hexdocs.pm/pulsar_ex).
-
