@@ -39,10 +39,15 @@ defmodule PulsarEx.Consumer do
         } = state
       ) do
     if can_flush?(state) do
-      case flush(state) do
-        :ok ->
+      resp = flush(state)
+      case resp do
+        {:ok, new_state} ->
           Process.send(self(), :poll, [])
-          {:noreply, %{state | unprocessed_messages: [], last_flushed_at: Timex.now()}}
+          {:noreply, new_state}
+
+        {:full, new_state} ->
+          Process.send_after(self(), :poll, poll_interval)
+          {:noreply, new_state}
 
         {:error, err} ->
           Logger.error("Error flushing in pulsar consumer #{inspect(err)}", state: state)
@@ -89,7 +94,7 @@ defmodule PulsarEx.Consumer do
       |> Timex.before?(Timex.now())
   end
 
-  defp flush(%{unprocessed_messages: []}), do: :ok
+  defp flush(%{unprocessed_messages: []} = state), do: {:ok, %{state | last_flushed_at: Timex.now()}}
 
   defp flush(
          %{
@@ -105,7 +110,17 @@ defmodule PulsarEx.Consumer do
         %{topic: topic, subscription: subscription},
         fn ->
           # It's ok to send out many ack/nacks because the actual consumer will batch them
-          callback_module.handle_messages(unprocessed_messages, state)
+          grouped = callback_module.handle_messages(unprocessed_messages, state)
+            |> Enum.group_by(fn
+              {:ack, _msg} ->
+                :tasks
+              {:nack, _msg} ->
+                :tasks
+              {:full, _msg} ->
+                :full
+            end)
+
+          (grouped[:tasks] || [])
           |> Enum.map(fn
             {:ack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
               Task.async(fn -> :pulserl.ack(consumer, id) end)
@@ -115,7 +130,22 @@ defmodule PulsarEx.Consumer do
           end)
           |> Task.await_many()
 
-          {:ok, %{topic: topic, subscription: subscription}}
+          unprocessed_messages =
+            (grouped[:full] || [])
+            |> Enum.map(fn {:full, msg} -> msg end)
+          response =
+            if length(grouped[:tasks] || []) > 0 do
+              # If atleast one message was acked/nacked, we term this iteration successful
+              :ok
+            else
+              # None of the messages were accepted
+              Logger.warn("callback module cannot consume messages because it is full")
+              :full
+            end
+          {
+            {response, %{state | unprocessed_messages: unprocessed_messages, last_flushed_at: Timex.now()}},
+            %{topic: topic, subscription: subscription}
+          }
         end
       )
     rescue
