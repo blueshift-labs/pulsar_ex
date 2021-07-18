@@ -9,19 +9,27 @@ defmodule PulsarEx.Worker do
     {topic, opts} = Keyword.pop!(opts, :topic)
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
-    {otp_app, topic, subscription, jobs, opts}
+    {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
+    {otp_app, topic, subscription, jobs, middlewares, opts}
   end
 
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do
       use GenServer
       @behaviour PulsarEx.ConsumerCallback
-      @behaviour PulsarEx.Worker.Callback
+      @behaviour PulsarEx.WorkerCallback
 
       alias Pulserl.Header.Structures.ConsumerMessage
+      alias PulsarEx.JobState
 
-      {otp_app, topic, subscription, jobs, worker_opts} =
+      require Logger
+
+      {otp_app, topic, subscription, jobs, middlewares, worker_opts} =
         PulsarEx.Worker.compile_config(__MODULE__, opts)
+
+      @default_middlewares [PulsarEx.Middlewares.Telemetry, PulsarEx.Middlewares.Logging]
+
+      @middlewares @default_middlewares ++ middlewares
 
       @otp_app otp_app
       @topic topic
@@ -37,6 +45,18 @@ defmodule PulsarEx.Worker do
         # using pulsar as a message queue expects each job to take longer, while more consumers to distribute the load
         queue_size: 10
       ]
+
+      def job_handler() do
+        handler = fn %JobState{job: job, payload: payload} = job_state ->
+          %JobState{job_state | state: handle_job(job, payload)}
+        end
+
+        @middlewares
+        |> Enum.reverse()
+        |> Enum.reduce(handler, fn middleware, acc ->
+          middleware.call(acc)
+        end)
+      end
 
       @spec enqueue_job(job :: atom(), params :: map(), message_opts :: keyword()) ::
               :ok | {:error, :timeout}
@@ -109,38 +129,27 @@ defmodule PulsarEx.Worker do
         state
       end
 
+      @impl PulsarEx.ConsumerCallback
       def handle_messages(
             [%ConsumerMessage{properties: %{"job" => job}, payload: payload} = msg],
             _state
           ) do
-        job = String.to_atom(job)
-        metadata = %{job: job, topic: @topic, subscription: @subscription}
 
-        :telemetry.span(
-          [:pulsar, :handle_job],
-          metadata,
-          fn ->
-            case handle_job(job, Jason.decode!(payload)) do
-              :ok ->
-                :telemetry.execute(
-                  [:pulsar, :handle_job, :success, :count],
-                  %{count: 1},
-                  metadata
-                )
+        job_state =
+          job_handler().(%JobState{
+            topic: @topic,
+            subscription: @subscription,
+            job: String.to_atom(job),
+            payload: Jason.decode!(payload)
+          })
 
-                {[{:ack, msg}], metadata}
+        case job_state do
+          %JobState{state: :ok} ->
+            [{:ack, msg}]
 
-              _ ->
-                :telemetry.execute(
-                  [:pulsar, :handle_job, :error, :count],
-                  %{count: 1},
-                  metadata
-                )
-
-                {[{:nack, msg}], metadata}
-            end
-          end
-        )
+          _ ->
+            [{:nack, msg}]
+        end
       end
     end
   end

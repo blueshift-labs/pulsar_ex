@@ -1,3 +1,3 @@
-defmodule PulsarEx.Worker.Callback do
+defmodule PulsarEx.WorkerCallback do
   @callback handle_job(job :: atom(), payload :: any()) :: :ok | {:error, any()}
 end
