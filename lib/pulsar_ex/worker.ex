@@ -1,4 +1,13 @@
 defmodule PulsarEx.Worker do
+  defmodule JobState do
+    @enforce_keys [:job, :payload, :state]
+    defstruct [:job, :payload, :state]
+  end
+
+  defmodule Middleware do
+    @callback call(%JobState{}) :: %JobState{}
+  end
+
   defmodule EnqueueTimeoutError do
     defexception message: "timeout enqueuing job"
   end
@@ -9,7 +18,8 @@ defmodule PulsarEx.Worker do
     {topic, opts} = Keyword.pop!(opts, :topic)
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
-    {otp_app, topic, subscription, jobs, opts}
+    {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
+    {otp_app, topic, subscription, jobs, middlewares, opts}
   end
 
   defmacro __using__(opts) do
@@ -17,16 +27,20 @@ defmodule PulsarEx.Worker do
       use GenServer
       @behaviour PulsarEx.ConsumerCallback
       @behaviour PulsarEx.Worker.Callback
+      @behaviour Middleware
 
       alias Pulserl.Header.Structures.ConsumerMessage
 
-      {otp_app, topic, subscription, jobs, worker_opts} =
+      require Logger
+
+      {otp_app, topic, subscription, jobs, middlewares, worker_opts} =
         PulsarEx.Worker.compile_config(__MODULE__, opts)
 
       @otp_app otp_app
       @topic topic
       @subscription subscription
       @jobs jobs
+      @middlewares middlewares ++ [__MODULE__]
       @worker_opts worker_opts
       @default_opts [
         # by default, we batch the acks
@@ -37,6 +51,30 @@ defmodule PulsarEx.Worker do
         # using pulsar as a message queue expects each job to take longer, while more consumers to distribute the load
         queue_size: 10
       ]
+
+      @impl PulsarEx.Worker.Middleware
+      def call(%JobState{job: job, payload: payload, state: :ok}) do
+        start = Timex.now()
+        Logger.info("start processing job", job: job)
+
+        state = handle_job(job, payload)
+
+        case state do
+          :ok ->
+            nil
+
+          err ->
+            Logger.error("error processing job", job: job, payload: payload, error: err)
+        end
+
+        duration = Timex.diff(Timex.now(), start, :seconds)
+
+        Logger.info("finished processing job in #{duration}s", job: job)
+
+        %JobState{state | state: state}
+      end
+
+      def call(job_state), do: job_state
 
       @spec enqueue_job(job :: atom(), params :: map(), message_opts :: keyword()) ::
               :ok | {:error, :timeout}
@@ -116,12 +154,24 @@ defmodule PulsarEx.Worker do
         job = String.to_atom(job)
         metadata = %{job: job, topic: @topic, subscription: @subscription}
 
+        job_state = %JobState{
+          job: job,
+          payload: Jason.decode!(payload),
+          state: :ok
+        }
+
         :telemetry.span(
           [:pulsar, :handle_job],
           metadata,
           fn ->
-            case handle_job(job, Jason.decode!(payload)) do
-              :ok ->
+            job_state =
+              @middlewares
+              |> Enum.reduce(job_state, fn m, acc ->
+                m.call(acc)
+              end)
+
+            case job_state do
+              %JobState{state: :ok} ->
                 :telemetry.execute(
                   [:pulsar, :handle_job, :success, :count],
                   %{count: 1},
