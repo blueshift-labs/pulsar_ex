@@ -1,4 +1,8 @@
 defmodule PulsarEx.Worker do
+  defmodule EnqueueTimeoutError do
+    defexception message: "timeout enqueuing job"
+  end
+
   def compile_config(module, opts) do
     {otp_app, opts} = Keyword.pop!(opts, :otp_app)
     opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
@@ -65,6 +69,18 @@ defmodule PulsarEx.Worker do
             )
 
             {:error, :timeout}
+        end
+      end
+
+      @spec enqueue_job!(job :: atom(), params :: map(), message_opts :: keyword()) ::
+              :ok | {:error, :timeout}
+      def enqueue_job!(job, params, message_opts \\ []) when job in @jobs do
+        case enqueue_job(job, params, message_opts) do
+          :ok ->
+            :ok
+
+          {:error, :timeout} ->
+            raise PulsarEx.Worker.EnqueueTimeoutError
         end
       end
 
