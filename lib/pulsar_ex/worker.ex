@@ -46,6 +46,8 @@ defmodule PulsarEx.Worker do
         queue_size: 10
       ]
 
+      @producer_module Application.compile_env!(:pulsar_ex, :producer_module)
+
       def job_handler() do
         handler = fn %JobState{job: job, payload: payload} = job_state ->
           %JobState{job_state | state: handle_job(job, payload)}
@@ -66,7 +68,7 @@ defmodule PulsarEx.Worker do
           |> Enum.into(%{})
           |> Map.put("job", job)
 
-        PulsarEx.produce(
+        @producer_module.produce(
           @topic,
           Jason.encode!(params),
           Keyword.put(message_opts, :properties, properties)
@@ -134,7 +136,6 @@ defmodule PulsarEx.Worker do
             [%ConsumerMessage{properties: %{"job" => job}, payload: payload} = msg],
             _state
           ) do
-
         job_state =
           job_handler().(%JobState{
             topic: @topic,

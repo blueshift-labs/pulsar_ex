@@ -1,4 +1,6 @@
 defmodule PulsarEx do
+  @behaviour PulsarEx.ProducerCallback
+
   @moduledoc """
   PulsarEx is a pure elixir/erlang client for [Apache Pulsar](https://pulsar.apache.org/).
   It's a wrapper of erlang client [pulserl](https://github.com/skulup/pulserl), with a bunch of bug fixes and improvements.
@@ -109,6 +111,7 @@ defmodule PulsarEx do
   # deliver_at_time :: non_neg_integer(),
   #   For delayed message delivery
   """
+  @impl true
   def produce(topic, payload, message_opts \\ []) do
     timeout = Keyword.get(message_opts, :timeout, @produce_timeout)
     pid = self()
