@@ -23,7 +23,7 @@ defmodule PulsarEx.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :pulserl],
+      extra_applications: [:logger],
       mod: {PulsarEx.Application, []}
     ]
   end
@@ -34,7 +34,9 @@ defmodule PulsarEx.MixProject do
   defp deps do
     [
       {:pulserl,
-       git: "https://github.com/blueshift-labs/pulserl.git", tag: "0.1.3", only: [:dev, :test]},
+       git: "https://github.com/blueshift-labs/pulserl.git",
+       tag: "0.1.3",
+       only: [:dev, :test, :integration]},
       {:timex, "~> 3.0"},
       {:logger_json, "~> 4.0"},
       {:rec_struct, "~> 0.3.0"},
