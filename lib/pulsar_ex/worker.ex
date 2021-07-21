@@ -48,6 +48,10 @@ defmodule PulsarEx.Worker do
 
       @producer_module Application.compile_env!(:pulsar_ex, :producer_module)
 
+      def topic(), do: @topic
+      def subscription(), do: @subscription
+      def jobs(), do: @jobs
+
       def job_handler() do
         handler = fn %JobState{job: job, payload: payload} = job_state ->
           %JobState{job_state | state: handle_job(job, payload)}
@@ -116,7 +120,8 @@ defmodule PulsarEx.Worker do
         opts =
           @default_opts
           |> Keyword.merge(@worker_opts)
-          |> Keyword.merge(opts ++ [batch_size: 1, initial_position: :earliest])
+          |> Keyword.merge(opts)
+          |> Keyword.merge([batch_size: 1, initial_position: :earliest])
 
         PulsarEx.start_consumers(@topic, @subscription, __MODULE__, opts)
         {:ok, opts}
