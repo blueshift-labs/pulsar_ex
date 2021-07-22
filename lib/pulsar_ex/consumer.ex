@@ -60,9 +60,9 @@ defmodule PulsarEx.Consumer do
           Logger.error("Error receiving message in pulserl consumer #{inspect(err)}", state: state)
 
           :telemetry.execute(
-            [:pulsar, :receive, :error],
+            [:pulsar_ex, :receive, :error],
             %{count: 1},
-            %{topic: topic, subscription: subscription, error: err}
+            %{topic: topic, subscription: subscription}
           )
 
           Process.send_after(self(), :poll, poll_interval)
@@ -100,24 +100,26 @@ defmodule PulsarEx.Consumer do
          } = state
        ) do
     try do
-      :telemetry.span(
-        [:pulsar, :handle_messages],
-        %{topic: topic, subscription: subscription},
-        fn ->
-          # It's ok to send out many ack/nacks because the actual consumer will batch them
-          callback_module.handle_messages(unprocessed_messages, state)
-          |> Enum.map(fn
-            {:ack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
-              Task.async(fn -> :pulserl.ack(consumer, id) end)
+      start = System.monotonic_time()
+      metadata = %{topic: topic, subscription: subscription}
 
-            {:nack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
-              Task.async(fn -> :pulserl.nack(consumer, id) end)
-          end)
-          |> Task.await_many()
+      callback_module.handle_messages(unprocessed_messages, state)
+      |> Enum.map(fn
+        {:ack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
+          Task.async(fn -> :pulserl.ack(consumer, id) end)
 
-          {:ok, %{topic: topic, subscription: subscription}}
-        end
+        {:nack, %Structures.ConsumerMessage{id: id, consumer: consumer}} ->
+          Task.async(fn -> :pulserl.nack(consumer, id) end)
+      end)
+      |> Task.await_many()
+
+      :telemetry.execute(
+        [:pulsar_ex, :handle_messages],
+        %{count: length(unprocessed_messages), duration: System.monotonic_time() - start},
+        metadata
       )
+
+      :ok
     rescue
       err ->
         {:error, err}

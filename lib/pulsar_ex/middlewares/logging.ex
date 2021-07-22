@@ -11,6 +11,8 @@ defmodule PulsarEx.Middlewares.Logging do
       started_at = Timex.now()
       Logger.info("start processing job #{job}")
 
+      Logger.debug("processing job #{job} with payload", payload: job_state.payload)
+
       job_state = handler.(%JobState{job_state | started_at: started_at})
 
       finished_at = Timex.now()
@@ -18,6 +20,9 @@ defmodule PulsarEx.Middlewares.Logging do
 
       case job_state.state do
         :ok ->
+          Logger.info("finished processing job #{job} with duration #{duration}ms")
+
+        {:ok, _} ->
           Logger.info("finished processing job #{job} with duration #{duration}ms")
 
         state ->

@@ -43,7 +43,8 @@ defmodule PulsarEx.Worker do
         dead_letter_topic_name: topic,
         dead_letter_topic_max_redeliver_count: 5,
         # using pulsar as a message queue expects each job to take longer, while more consumers to distribute the load
-        queue_size: 10
+        queue_size: 10,
+        workers: 1
       ]
 
       @producer_module Application.compile_env!(:pulsar_ex, :producer_module)
@@ -51,6 +52,8 @@ defmodule PulsarEx.Worker do
       def topic(), do: @topic
       def subscription(), do: @subscription
       def jobs(), do: @jobs
+      def default_opts(), do: @default_opts
+      def worker_opts(), do: @worker_opts
 
       def job_handler() do
         handler = fn %JobState{job: job, payload: payload} = job_state ->
@@ -80,7 +83,7 @@ defmodule PulsarEx.Worker do
         |> case do
           {:messageId, _, _, _, _, _} ->
             :telemetry.execute(
-              [:pulsar, :worker, :enqueue, :success, :count],
+              [:pulsar_ex, :worker, :enqueue, :success],
               %{count: 1},
               %{job: job, topic: @topic}
             )
@@ -89,7 +92,7 @@ defmodule PulsarEx.Worker do
 
           {:error, :timeout} ->
             :telemetry.execute(
-              [:pulsar, :worker, :enqueue, :timeout, :count],
+              [:pulsar_ex, :worker, :enqueue, :timeout],
               %{count: 1},
               %{job: job, topic: @topic}
             )
@@ -111,6 +114,10 @@ defmodule PulsarEx.Worker do
       end
 
       def start_link(opts) do
+        opts =
+          Application.get_env(@otp_app, __MODULE__, [])
+          |> Keyword.merge(opts)
+
         GenServer.start_link(__MODULE__, opts, name: __MODULE__)
       end
 
@@ -121,7 +128,7 @@ defmodule PulsarEx.Worker do
           @default_opts
           |> Keyword.merge(@worker_opts)
           |> Keyword.merge(opts)
-          |> Keyword.merge([batch_size: 1, initial_position: :earliest])
+          |> Keyword.merge(batch_size: 1, initial_position: :earliest)
 
         PulsarEx.start_consumers(@topic, @subscription, __MODULE__, opts)
         {:ok, opts}
@@ -151,6 +158,9 @@ defmodule PulsarEx.Worker do
 
         case job_state do
           %JobState{state: :ok} ->
+            [{:ack, msg}]
+
+          %JobState{state: {:ok, _}} ->
             [{:ack, msg}]
 
           _ ->
