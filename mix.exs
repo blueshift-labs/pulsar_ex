@@ -33,10 +33,7 @@ defmodule PulsarEx.MixProject do
 
   defp deps do
     [
-      {:pulserl,
-       git: "https://github.com/blueshift-labs/pulserl.git",
-       tag: "0.1.3",
-       only: [:dev, :test, :integration]},
+      {:pulserl, git: "https://github.com/blueshift-labs/pulserl.git", tag: "0.1.4"},
       {:timex, "~> 3.0"},
       {:logger_json, "~> 4.0"},
       {:rec_struct, "~> 0.3.0"},

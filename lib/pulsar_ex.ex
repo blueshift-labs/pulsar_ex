@@ -49,6 +49,8 @@ defmodule PulsarEx do
   #   Always consume the messages in batch, indicate the size of each batch, defaults to 1
   # poll_interval = 100,
   #   How often to poll next batch, defaults to 100 milliseconds
+  # poll_size = 10 :: non_neg_integer()
+  #   Number of messages each time poll from pulsar, in flight messages per worker
   # workers = 1,
   #   Number of workers to work on messages, default to 1.
   #   Note in the case of consuming from partitioned topics and with key_shared subscription,

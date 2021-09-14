@@ -14,7 +14,7 @@ defmodule PulsarEx.Worker do
   end
 
   defmacro __using__(opts) do
-    quote bind_quoted: [opts: opts] do
+    quote location: :keep, bind_quoted: [opts: opts] do
       use GenServer
       @behaviour PulsarEx.ConsumerCallback
       @behaviour PulsarEx.WorkerCallback
@@ -128,7 +128,13 @@ defmodule PulsarEx.Worker do
           @default_opts
           |> Keyword.merge(@worker_opts)
           |> Keyword.merge(opts)
-          |> Keyword.merge(batch_size: 1, initial_position: :earliest)
+
+        queue_size = Keyword.get(opts, :queue_size, Keyword.get(@default_opts, :queue_size))
+        poll_size = div(queue_size, 2)
+
+        opts =
+          opts
+          |> Keyword.merge(batch_size: 1, poll_size: poll_size, initial_position: :earliest)
 
         PulsarEx.start_consumers(@topic, @subscription, __MODULE__, opts)
         {:ok, opts}

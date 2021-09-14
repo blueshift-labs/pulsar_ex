@@ -34,6 +34,7 @@ defmodule PulsarExTest do
 
       def handle_messages(msgs, _state) do
         msgs
+        # |> IO.inspect
         |> Enum.map(fn %ConsumerMessage{} = msg ->
           send(@compiled_pid, {:test_callback, msg})
 
