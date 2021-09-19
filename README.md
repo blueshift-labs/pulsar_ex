@@ -18,3 +18,12 @@ def deps do
   ]
 end
 ```
+
+stream = (1..201)|>Task.async_stream(fn x ->     
+  PulsarEx.DefaultWorker.enqueue_job_async(:test, %{message: "hello-#{x}"})
+end, max_concurrency: 100)
+
+Enum.to_list(stream)
+
+
+messages = PulsarEx.poll("persistent://public/default/2.json", "test", PulsarEx.DefaultPassiveConsumer)

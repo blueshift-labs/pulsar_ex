@@ -1,0 +1,12 @@
+version: '3'
+services:
+  pulsar:
+    image: apachepulsar/pulsar:2.8.1
+    container_name: pulsar
+    restart: always
+    ports:
+      - '6650:6650'
+      - '8080:8080'
+    environment:
+      - PULSAR_MEM=-Xms1g -Xmx1g -XX:MaxDirectMemorySize=1g
+    command: bin/pulsar standalone

@@ -1,8 +1,4 @@
 defmodule PulsarEx.Worker do
-  defmodule EnqueueTimeoutError do
-    defexception message: "timeout enqueuing job"
-  end
-
   def compile_config(module, opts) do
     {otp_app, opts} = Keyword.pop!(opts, :otp_app)
     opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
@@ -10,52 +6,44 @@ defmodule PulsarEx.Worker do
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
     {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
-    {otp_app, topic, subscription, jobs, middlewares, opts}
+    {producer_opts, opts} = Keyword.pop(opts, :producer_opts, [])
+    {otp_app, topic, subscription, jobs, middlewares, producer_opts, opts}
   end
 
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
-      use GenServer
-      @behaviour PulsarEx.ConsumerCallback
-      @behaviour PulsarEx.WorkerCallback
-
-      alias Pulserl.Header.Structures.ConsumerMessage
-      alias PulsarEx.JobState
-
-      require Logger
-
-      {otp_app, topic, subscription, jobs, middlewares, worker_opts} =
+      {otp_app, topic, subscription, jobs, middlewares, producer_opts, opts} =
         PulsarEx.Worker.compile_config(__MODULE__, opts)
 
-      @default_middlewares [PulsarEx.Middlewares.Telemetry, PulsarEx.Middlewares.Logging]
+      opts =
+        opts
+        |> Keyword.merge(batch_size: 1, passive_mode: false, initial_position: :earliest)
+        |> Keyword.put_new(:dead_letter_topic, topic)
 
-      @middlewares @default_middlewares ++ middlewares
+      use PulsarEx.Consumer, opts
+      @behaviour PulsarEx.WorkerCallback
+
+      alias PulsarEx.{JobState, ConsumerMessage}
 
       @otp_app otp_app
       @topic topic
       @subscription subscription
       @jobs jobs
-      @worker_opts worker_opts
-      @default_opts [
-        # by default, we batch the acks
-        acknowledgment_timeout: 1_000,
-        # by default, we send the message back to end of the topic
-        dead_letter_topic_name: topic,
-        dead_letter_topic_max_redeliver_count: 5,
-        # using pulsar as a message queue expects each job to take longer, while more consumers to distribute the load
-        queue_size: 10,
-        workers: 1
-      ]
+      @default_middlewares [PulsarEx.Middlewares.Telemetry, PulsarEx.Middlewares.Logging]
+      @middlewares @default_middlewares ++ middlewares
+      @producer_opts producer_opts
+      @opts opts
 
-      @producer_module Application.compile_env!(:pulsar_ex, :producer_module)
+      def worker_spec() do
+        {
+          @topic,
+          @subscription,
+          __MODULE__,
+          @opts
+        }
+      end
 
-      def topic(), do: @topic
-      def subscription(), do: @subscription
-      def jobs(), do: @jobs
-      def default_opts(), do: @default_opts
-      def worker_opts(), do: @worker_opts
-
-      def job_handler() do
+      defp job_handler() do
         handler = fn %JobState{job: job, payload: payload} = job_state ->
           %JobState{job_state | state: handle_job(job, payload)}
         end
@@ -67,111 +55,66 @@ defmodule PulsarEx.Worker do
         end)
       end
 
-      @spec enqueue_job(job :: atom(), params :: map(), message_opts :: keyword()) ::
-              :ok | {:error, :timeout}
+      @impl true
+      def handle_messages([%ConsumerMessage{properties: properties} = message], _state) do
+        {job, properties} = Map.pop!(properties, "job")
+        payload = Jason.decode!(message.payload)
+
+        job_state =
+          job_handler().(%JobState{
+            topic: @topic,
+            subscription: @subscription,
+            job: String.to_atom(job),
+            payload: payload,
+            properties: properties,
+            publish_time: message.publish_time,
+            event_time: message.event_time,
+            producer_name: message.producer_name,
+            partition_key: message.partition_key,
+            ordering_key: message.ordering_key,
+            deliver_at_time: message.deliver_at_time,
+            redelivery_count: message.redelivery_count,
+            started_at: nil,
+            finished_at: nil,
+            state: nil
+          })
+
+        [job_state.state]
+      end
+
+      @impl true
+      def handle_job(job, payload) do
+        :ok
+      end
+
+      defoverridable handle_job: 2
+
       def enqueue_job(job, params, message_opts \\ []) when job in @jobs do
         properties =
           Keyword.get(message_opts, :properties, [])
           |> Enum.into(%{})
           |> Map.put("job", job)
 
-        @producer_module.produce(
+        PulsarEx.sync_produce(
           @topic,
           Jason.encode!(params),
-          Keyword.put(message_opts, :properties, properties)
+          Keyword.put(message_opts, :properties, properties),
+          @producer_opts
         )
-        |> case do
-          {:messageId, _, _, _, _, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :worker, :enqueue, :success],
-              %{count: 1},
-              %{job: job, topic: @topic}
-            )
-
-            :ok
-
-          {:error, :timeout} ->
-            :telemetry.execute(
-              [:pulsar_ex, :worker, :enqueue, :timeout],
-              %{count: 1},
-              %{job: job, topic: @topic}
-            )
-
-            {:error, :timeout}
-        end
       end
 
-      @spec enqueue_job!(job :: atom(), params :: map(), message_opts :: keyword()) ::
-              :ok | {:error, :timeout}
-      def enqueue_job!(job, params, message_opts \\ []) when job in @jobs do
-        case enqueue_job(job, params, message_opts) do
-          :ok ->
-            :ok
+      def enqueue_job_async(job, params, message_opts \\ []) when job in @jobs do
+        properties =
+          Keyword.get(message_opts, :properties, [])
+          |> Enum.into(%{})
+          |> Map.put("job", job)
 
-          {:error, :timeout} ->
-            raise PulsarEx.Worker.EnqueueTimeoutError
-        end
-      end
-
-      def start_link(opts) do
-        opts =
-          Application.get_env(@otp_app, __MODULE__, [])
-          |> Keyword.merge(opts)
-
-        GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-      end
-
-      def init(opts) do
-        Process.flag(:trap_exit, true)
-
-        opts =
-          @default_opts
-          |> Keyword.merge(@worker_opts)
-          |> Keyword.merge(opts)
-
-        queue_size = Keyword.get(opts, :queue_size, Keyword.get(@default_opts, :queue_size))
-        poll_size = div(queue_size, 2)
-
-        opts =
-          opts
-          |> Keyword.merge(batch_size: 1, poll_size: poll_size, initial_position: :earliest)
-
-        PulsarEx.start_consumers(@topic, @subscription, __MODULE__, opts)
-        {:ok, opts}
-      end
-
-      def handle_info({:EXIT, _pid, :normal}, state) do
-        {:noreply, state}
-      end
-
-      def terminate(reason, state) do
-        PulsarEx.stop_consumers(@topic, @subscription)
-        state
-      end
-
-      @impl PulsarEx.ConsumerCallback
-      def handle_messages(
-            [%ConsumerMessage{properties: %{"job" => job}, payload: payload} = msg],
-            _state
-          ) do
-        job_state =
-          job_handler().(%JobState{
-            topic: @topic,
-            subscription: @subscription,
-            job: String.to_atom(job),
-            payload: Jason.decode!(payload)
-          })
-
-        case job_state do
-          %JobState{state: :ok} ->
-            [{:ack, msg}]
-
-          %JobState{state: {:ok, _}} ->
-            [{:ack, msg}]
-
-          _ ->
-            [{:nack, msg}]
-        end
+        PulsarEx.async_produce(
+          @topic,
+          Jason.encode!(params),
+          Keyword.put(message_opts, :properties, properties),
+          @producer_opts
+        )
       end
     end
   end

@@ -1,0 +1,7 @@
+changes
+  package pulsar.proto;   =>   package pulsar_ex.proto;
+
+  optional int32 num_messages_in_batch = 11 [default = 1];   =>   optional int32 num_messages_in_batch = 11;
+
+
+protoc --elixir_out=lib/pulsar/proto.ex priv/pulsar_api.proto
