@@ -5,8 +5,8 @@ defmodule PulsarEx.ProducerManager do
 
   alias PulsarEx.{Producers, PartitionedProducerSupervisor}
 
-  def create(topic_name, opts) do
-    GenServer.call(__MODULE__, {:create, topic_name, opts})
+  def create(topic_name, opts, timeout \\ 5_000) do
+    GenServer.call(__MODULE__, {:create, topic_name, opts}, timeout)
   end
 
   def start_link({lookup, auto_start}) do

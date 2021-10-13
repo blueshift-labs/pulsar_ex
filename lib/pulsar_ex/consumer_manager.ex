@@ -5,12 +5,16 @@ defmodule PulsarEx.ConsumerManager do
 
   alias PulsarEx.{Consumers, PartitionedConsumerSupervisor, DefaultPassiveConsumer}
 
-  def create(topic_name, subscription, module, opts) do
-    GenServer.call(__MODULE__, {:create, topic_name, subscription, module, opts})
+  def create({topic_name, subscription, module, opts, timeout}) do
+    create(topic_name, subscription, module, opts, timeout)
   end
 
   def create({topic_name, subscription, module, opts}) do
-    GenServer.call(__MODULE__, {:create, topic_name, subscription, module, opts})
+    create(topic_name, subscription, module, opts, 5_000)
+  end
+
+  def create(topic_name, subscription, module, opts, timeout \\ 5_000) do
+    GenServer.call(__MODULE__, {:create, topic_name, subscription, module, opts}, timeout)
   end
 
   def start_link({lookup, auto_start}) do
