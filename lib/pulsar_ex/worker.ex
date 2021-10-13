@@ -35,12 +35,12 @@ defmodule PulsarEx.Worker do
       @producer_opts producer_opts
       @opts opts
 
-      def worker_spec() do
+      def worker_spec(opts) do
         {
           @topic,
           @subscription,
           __MODULE__,
-          @opts
+          Keyword.merge(@opts, opts)
         }
       end
 
