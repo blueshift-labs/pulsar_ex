@@ -28,7 +28,7 @@ defmodule PulsarEx.PartitionedProducerManager do
 
   alias PulsarEx.{Topic, Admin, ProducerRegistry, PartitionedProducer}
 
-  @refresh_interval 30_000
+  @refresh_interval 60_000
   @num_producers 1
 
   def start_link({topic_name, producer_opts, lookup, sup}) do

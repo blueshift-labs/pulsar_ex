@@ -32,7 +32,7 @@ defmodule PulsarEx.PartitionedConsumerManager do
 
   alias PulsarEx.{Topic, Admin, ConsumerRegistry}
 
-  @refresh_interval 30_000
+  @refresh_interval 60_000
   @num_consumers 1
 
   def start_link({topic_name, subscription, module, consumer_opts, lookup, sup}) do
