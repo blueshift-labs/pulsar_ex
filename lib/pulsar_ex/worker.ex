@@ -19,7 +19,6 @@ defmodule PulsarEx.Worker do
         opts
         |> Keyword.merge(batch_size: 1, passive_mode: false, initial_position: :earliest)
         |> Keyword.put_new(:dead_letter_topic, topic)
-        |> Keyword.put_new(:num_consumers, Keyword.get(opts, :workers, 1))
 
       use PulsarEx.Consumer, opts
       @behaviour PulsarEx.WorkerCallback
@@ -35,12 +34,20 @@ defmodule PulsarEx.Worker do
       @producer_opts producer_opts
       @opts opts
 
-      def worker_spec() do
+      def worker_spec(opts) do
+        workers = Keyword.get(opts, :workers) || Keyword.get(@opts, :workers)
+
+        opts =
+          case workers do
+            nil -> opts
+            workers -> Keyword.put(opts, :num_consumers, workers)
+          end
+
         {
           @topic,
           @subscription,
           __MODULE__,
-          @opts
+          Keyword.merge(@opts, opts)
         }
       end
 
