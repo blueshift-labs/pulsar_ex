@@ -1,20 +1,13 @@
 defmodule PulsarEx.Consumer do
   defmodule State do
     @enforce_keys [
+      :state,
       :topic,
       :topic_name,
       :subscription,
       :brokers,
       :admin_port,
-      :broker,
       :subscription_type,
-      :priority_level,
-      :read_compacted,
-      :initial_position,
-      :consumer_id,
-      :consumer_name,
-      :properties,
-      :connection,
       :receiving_queue_size,
       :refill_queue_size_watermark,
       :flow_permits_watermark,
@@ -36,9 +29,10 @@ defmodule PulsarEx.Consumer do
       :nacks,
       :dead_letters,
       :passive_mode,
-      :opts
+      :consumer_opts
     ]
     defstruct [
+      :state,
       :topic,
       :topic_name,
       :subscription,
@@ -74,7 +68,7 @@ defmodule PulsarEx.Consumer do
       :nacks,
       :dead_letters,
       :passive_mode,
-      :opts
+      :consumer_opts
     ]
   end
 
@@ -151,23 +145,105 @@ defmodule PulsarEx.Consumer do
 
         subscription_type = Keyword.get(consumer_opts, :subscription_type, @subscription_type)
 
-        with {:ok, broker} <- Admin.lookup_topic(brokers, admin_port, topic),
+        passive_mode = Keyword.get(consumer_opts, :passive_mode, @passive_mode)
+
+        receiving_queue_size =
+          max(Keyword.get(consumer_opts, :receiving_queue_size, @receiving_queue_size), 2)
+
+        flow_control_watermark =
+          Keyword.get(consumer_opts, :flow_control_watermark, @flow_control_watermark)
+
+        refill_queue_size_watermark =
+          min(
+            max(trunc(receiving_queue_size * flow_control_watermark), 1),
+            receiving_queue_size
+          )
+
+        flow_permits_watermark = receiving_queue_size - refill_queue_size_watermark
+
+        batch_size =
+          min(
+            max(Keyword.get(consumer_opts, :batch_size, @batch_size), 1),
+            receiving_queue_size
+          )
+
+        max_redelivery_attempts =
+          max(Keyword.get(consumer_opts, :max_redelivery_attempts, @max_redelivery_attempts), 1)
+
+        redelivery_policy = Keyword.get(consumer_opts, :redelivery_policy, @redelivery_policy)
+        dead_letter_topic = Keyword.get(consumer_opts, :dead_letter_topic, @dead_letter_topic)
+        poll_interval = max(Keyword.get(consumer_opts, :poll_interval, @poll_interval), 10)
+
+        refresh_interval =
+          max(Keyword.get(consumer_opts, :refresh_interval, @refresh_interval), 5_000)
+
+        ack_interval = max(Keyword.get(consumer_opts, :ack_interval, @ack_interval), 1_000)
+
+        redelivery_interval =
+          max(Keyword.get(consumer_opts, :redelivery_interval, @redelivery_interval), 1_000)
+
+        dead_letter_interval =
+          max(Keyword.get(consumer_opts, :dead_letter_interval, @dead_letter_interval), 5_000)
+
+        dead_letter_producer_opts =
+          Keyword.get(consumer_opts, :dead_letter_producer_opts, @dead_letter_producer_opts)
+
+        termination_timeout =
+          min(Keyword.get(consumer_opts, :termination_timeout, @termination_timeout), 5_000)
+
+        state = %State{
+          state: :init,
+          topic: topic,
+          topic_name: topic_name,
+          subscription: subscription,
+          brokers: brokers,
+          admin_port: admin_port,
+          subscription_type: subscription_type,
+          receiving_queue_size: receiving_queue_size,
+          refill_queue_size_watermark: refill_queue_size_watermark,
+          flow_permits_watermark: flow_permits_watermark,
+          batch_size: batch_size,
+          max_redelivery_attempts: max_redelivery_attempts,
+          redelivery_policy: redelivery_policy,
+          dead_letter_topic: dead_letter_topic,
+          poll_interval: poll_interval,
+          refresh_interval: refresh_interval,
+          ack_interval: ack_interval,
+          redelivery_interval: redelivery_interval,
+          dead_letter_interval: dead_letter_interval,
+          termination_timeout: termination_timeout,
+          permits: receiving_queue_size,
+          queue: :queue.new(),
+          queue_size: 0,
+          batch: [],
+          acks: [],
+          nacks: [],
+          dead_letters: [],
+          passive_mode: passive_mode,
+          consumer_opts: consumer_opts
+        }
+
+        Process.send(self(), :init, [])
+
+        {:ok, state}
+      end
+
+      @impl true
+      def handle_info(:init, %{state: :init} = state) do
+        with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
              {:ok, pool} <- ConnectionManager.get_connection(broker),
              {:ok, reply} <-
                :poolboy.transaction(
                  pool,
                  &Connection.subscribe(
                    &1,
-                   topic_name,
-                   subscription,
-                   subscription_type,
-                   consumer_opts
+                   state.topic_name,
+                   state.subscription,
+                   state.subscription_type,
+                   state.consumer_opts
                  )
                ) do
           %{
-            topic: topic_name,
-            subscription: subscription,
-            subscription_type: subscription_type,
             priority_level: priority_level,
             read_compacted: read_compacted,
             initial_position: initial_position,
@@ -177,115 +253,45 @@ defmodule PulsarEx.Consumer do
             connection: connection
           } = reply
 
-          passive_mode = Keyword.get(consumer_opts, :passive_mode, @passive_mode)
-
-          receiving_queue_size =
-            max(Keyword.get(consumer_opts, :receiving_queue_size, @receiving_queue_size), 2)
-
-          flow_control_watermark =
-            Keyword.get(consumer_opts, :flow_control_watermark, @flow_control_watermark)
-
-          refill_queue_size_watermark =
-            min(
-              max(trunc(receiving_queue_size * flow_control_watermark), 1),
-              receiving_queue_size
-            )
-
-          flow_permits_watermark = receiving_queue_size - refill_queue_size_watermark
-
-          batch_size =
-            min(
-              max(Keyword.get(consumer_opts, :batch_size, @batch_size), 1),
-              receiving_queue_size
-            )
-
-          max_redelivery_attempts =
-            max(Keyword.get(consumer_opts, :max_redelivery_attempts, @max_redelivery_attempts), 1)
-
-          redelivery_policy = Keyword.get(consumer_opts, :redelivery_policy, @redelivery_policy)
-          dead_letter_topic = Keyword.get(consumer_opts, :dead_letter_topic, @dead_letter_topic)
-          poll_interval = max(Keyword.get(consumer_opts, :poll_interval, @poll_interval), 10)
-
-          refresh_interval =
-            max(Keyword.get(consumer_opts, :refresh_interval, @refresh_interval), 5_000)
-
-          ack_interval = max(Keyword.get(consumer_opts, :ack_interval, @ack_interval), 1_000)
-
-          redelivery_interval =
-            max(Keyword.get(consumer_opts, :redelivery_interval, @redelivery_interval), 1_000)
-
-          dead_letter_interval =
-            max(Keyword.get(consumer_opts, :dead_letter_interval, @dead_letter_interval), 5_000)
-
-          dead_letter_producer_opts =
-            Keyword.get(consumer_opts, :dead_letter_producer_opts, @dead_letter_producer_opts)
-
-          termination_timeout =
-            min(Keyword.get(consumer_opts, :termination_timeout, @termination_timeout), 5_000)
-
-          state = %State{
-            topic: topic,
-            topic_name: topic_name,
-            subscription: subscription,
-            brokers: brokers,
-            admin_port: admin_port,
-            broker: broker,
-            subscription_type: subscription_type,
-            priority_level: priority_level,
-            read_compacted: read_compacted,
-            initial_position: initial_position,
-            consumer_id: consumer_id,
-            consumer_name: consumer_name,
-            properties: properties,
-            connection: connection,
-            receiving_queue_size: receiving_queue_size,
-            refill_queue_size_watermark: refill_queue_size_watermark,
-            flow_permits_watermark: flow_permits_watermark,
-            batch_size: batch_size,
-            max_redelivery_attempts: max_redelivery_attempts,
-            redelivery_policy: redelivery_policy,
-            dead_letter_topic: dead_letter_topic,
-            poll_interval: poll_interval,
-            refresh_interval: refresh_interval,
-            ack_interval: ack_interval,
-            redelivery_interval: redelivery_interval,
-            dead_letter_interval: dead_letter_interval,
-            termination_timeout: termination_timeout,
-            permits: receiving_queue_size,
-            queue: :queue.new(),
-            queue_size: 0,
-            batch: [],
-            acks: [],
-            nacks: [],
-            dead_letters: [],
-            passive_mode: passive_mode,
-            opts: Enum.into(consumer_opts, %{})
-          }
-
           Process.monitor(connection)
 
-          unless passive_mode do
+          state = %{
+            state
+            | state: :ready,
+              broker: broker,
+              priority_level: priority_level,
+              read_compacted: read_compacted,
+              initial_position: initial_position,
+              consumer_id: consumer_id,
+              consumer_name: consumer_name,
+              properties: properties,
+              connection: connection
+          }
+
+          unless state.passive_mode do
             Process.send(self(), :poll, [])
           end
 
           Process.send_after(
             self(),
             :refresh,
-            refresh_interval + :rand.uniform(refresh_interval)
+            state.refresh_interval + :rand.uniform(state.refresh_interval)
           )
 
-          Process.send_after(self(), :acks, ack_interval)
-          Process.send_after(self(), :nacks, redelivery_interval)
-          Process.send_after(self(), :dead_letters, dead_letter_interval)
+          Process.send_after(self(), :acks, state.ack_interval)
+          Process.send_after(self(), :nacks, state.redelivery_interval)
+          Process.send_after(self(), :dead_letters, state.dead_letter_interval)
 
           Logger.debug(
-            "Started consumer for topic #{topic_name} with subscription #{subscription}"
+            "Started consumer for topic #{state.topic_name} with subscription #{
+              state.subscription
+            }"
           )
 
-          {:ok, state}
+          {:noreply, state}
         else
           err ->
-            {:stop, err}
+            {:stop, err, state}
         end
       end
 
