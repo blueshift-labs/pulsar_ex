@@ -61,21 +61,25 @@ defmodule PulsarEx.PartitionedConsumerManager do
       if partitions > 0 do
         Process.send_after(self(), :refresh, refresh_interval + :rand.uniform(refresh_interval))
 
-        err =
+        result =
           0..(partitions - 1)
-          |> Enum.reduce_while(nil, fn partition, nil ->
-            DynamicSupervisor.start_child(
-              sup,
-              pool_spec(%{topic | partition: partition}, subscription, module, consumer_opts)
-            )
-            |> case do
-              {:ok, _} -> {:cont, nil}
-              {:error, _} = err -> {:halt, err}
-            end
+          |> Task.async_stream(
+            fn partition ->
+              DynamicSupervisor.start_child(
+                sup,
+                pool_spec(%{topic | partition: partition}, subscription, module, consumer_opts)
+              )
+            end,
+            max_concurrency: 8
+          )
+          |> Enum.reduce_while(:ok, fn
+            {:ok, {:ok, _}}, :ok -> {:cont, :ok}
+            {:ok, {:error, _} = err}, :ok -> {:halt, err}
+            {:exit, err}, :ok -> {:halt, err}
           end)
 
-        case err do
-          nil ->
+        case result do
+          :ok ->
             :ets.insert(lookup, {topic_name, {topic, partitions}})
 
             state = %State{
@@ -94,7 +98,7 @@ defmodule PulsarEx.PartitionedConsumerManager do
             {:ok, state}
 
           _ ->
-            {:stop, err}
+            {:stop, result}
         end
       else
         DynamicSupervisor.start_child(sup, pool_spec(topic, subscription, module, consumer_opts))
