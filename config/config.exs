@@ -27,24 +27,24 @@ config :pulsar_ex,
     properties: [client: "pulsar_ex"]
   ],
   producers: [
-    [
-      topic: "persistent://public/default/1.json",
-      producer_access_mode: :shared,
-      properties: [test: true],
-      refresh_interval: 15_000,
-      num_producers: 2,
-      termination_timeout: 3_000
-    ]
+    # [
+    #   topic: "persistent://public/default/1.json",
+    #   producer_access_mode: :shared,
+    #   properties: [test: true],
+    #   refresh_interval: 15_000,
+    #   num_producers: 2,
+    #   termination_timeout: 3_000
+    # ]
   ],
   consumers: [
-    [
-      topic: "persistent://public/default/test.json",
-      subscription: "test",
-      properties: [test: false],
-      refresh_interval: 15_000,
-      num_consumers: 3,
-      module: PulsarEx.DefaultWorker
-    ]
+    # [
+    #   topic: "persistent://public/default/test.json",
+    #   subscription: "test",
+    #   properties: [test: false],
+    #   refresh_interval: 15_000,
+    #   num_consumers: 3,
+    #   module: PulsarEx.DefaultWorker
+    # ]
   ]
 
 import_config "#{Mix.env()}.exs"

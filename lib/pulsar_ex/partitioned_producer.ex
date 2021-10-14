@@ -1,26 +1,20 @@
 defmodule PulsarEx.PartitionedProducer do
   defmodule State do
     @enforce_keys [
+      :state,
       :brokers,
       :admin_port,
       :topic,
-      :topic_name,
-      :broker,
-      :connection,
-      :producer_id,
-      :producer_name,
-      :producer_access_mode,
-      :last_sequence_id,
-      :max_message_size,
-      :properties,
       :batch_enabled,
       :batch_size,
       :flush_interval,
       :refresh_interval,
       :termination_timeout,
-      :queue
+      :queue,
+      :producer_opts
     ]
     defstruct [
+      :state,
       :brokers,
       :admin_port,
       :topic,
@@ -38,7 +32,8 @@ defmodule PulsarEx.PartitionedProducer do
       :flush_interval,
       :refresh_interval,
       :termination_timeout,
-      :queue
+      :queue,
+      :producer_opts
     ]
   end
 
@@ -73,12 +68,34 @@ defmodule PulsarEx.PartitionedProducer do
     brokers = Application.fetch_env!(:pulsar_ex, :brokers)
     admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
 
-    with {:ok, broker} <- Admin.lookup_topic(brokers, admin_port, topic),
+    state = %State{
+      state: :init,
+      brokers: brokers,
+      admin_port: admin_port,
+      topic: topic,
+      producer_opts: producer_opts,
+      batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
+      batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
+      flush_interval: max(Keyword.get(producer_opts, :flush_interval, @flush_interval), 100),
+      refresh_interval:
+        max(Keyword.get(producer_opts, :refresh_interval, @refresh_interval), 10_000),
+      termination_timeout:
+        min(Keyword.get(producer_opts, :termination_timeout, @termination_timeout), 5_000),
+      queue: :queue.new()
+    }
+
+    Process.send(self(), :init, [])
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_info(:init, %{state: :init} = state) do
+    with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
          {:ok, pool} <- ConnectionManager.get_connection(broker),
          {:ok, reply} <-
            :poolboy.transaction(
              pool,
-             &Connection.create_producer(&1, Topic.to_name(topic), producer_opts)
+             &Connection.create_producer(&1, Topic.to_name(state.topic), state.producer_opts)
            ) do
       %{
         topic: topic_name,
@@ -93,43 +110,36 @@ defmodule PulsarEx.PartitionedProducer do
 
       Process.monitor(connection)
 
-      Logger.debug("Started producer for topic #{topic_name}")
+      Process.send_after(
+        self(),
+        :refresh,
+        state.refresh_interval + :rand.uniform(state.refresh_interval)
+      )
 
-      refresh_interval =
-        max(Keyword.get(producer_opts, :refresh_interval, @refresh_interval), 10_000)
-
-      Process.send_after(self(), :refresh, refresh_interval + :rand.uniform(refresh_interval))
-
-      state = %State{
-        brokers: brokers,
-        admin_port: admin_port,
-        topic: topic,
-        topic_name: topic_name,
-        broker: broker,
-        connection: connection,
-        producer_id: producer_id,
-        producer_name: producer_name,
-        producer_access_mode: producer_access_mode,
-        last_sequence_id: last_sequence_id,
-        max_message_size: max_message_size,
-        properties: properties,
-        batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
-        batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
-        flush_interval: max(Keyword.get(producer_opts, :flush_interval, @flush_interval), 100),
-        refresh_interval: refresh_interval,
-        termination_timeout:
-          min(Keyword.get(producer_opts, :termination_timeout, @termination_timeout), 5_000),
-        queue: :queue.new()
+      state = %{
+        state
+        | state: :ready,
+          broker: broker,
+          topic_name: topic_name,
+          producer_id: producer_id,
+          producer_name: producer_name,
+          producer_access_mode: producer_access_mode,
+          last_sequence_id: last_sequence_id,
+          max_message_size: max_message_size,
+          properties: properties,
+          connection: connection
       }
 
       if state.batch_enabled do
         Process.send_after(self(), :flush, state.flush_interval)
       end
 
-      {:ok, state}
+      Logger.debug("Started producer for topic #{topic_name}")
+
+      {:noreply, state}
     else
       err ->
-        {:stop, err}
+        {:stop, err, state}
     end
   end
 
@@ -189,6 +199,11 @@ defmodule PulsarEx.PartitionedProducer do
   end
 
   @impl true
+  def handle_call({:produce, _, _}, _from, %{state: :init} = state) do
+    {:reply, {:error, :not_ready}, state}
+  end
+
+  @impl true
   def handle_call({:produce, payload, message_opts}, from, state) when is_list(message_opts) do
     handle_call({:produce, payload, map_message_opts(message_opts)}, from, state)
   end
@@ -233,6 +248,12 @@ defmodule PulsarEx.PartitionedProducer do
     Logger.warn("Received close command from connection for topic #{topic_name}")
 
     {:stop, {:shutdown, :close}, state}
+  end
+
+  @impl true
+  def handle_cast({:produce, _, _}, %{state: :init} = state) do
+    Logger.error("Producer not ready for topic #{state.topic_name}")
+    {:noreply, state}
   end
 
   @impl true

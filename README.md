@@ -27,3 +27,5 @@ Enum.to_list(stream)
 
 
 messages = PulsarEx.poll("persistent://public/default/2.json", "test", PulsarEx.DefaultPassiveConsumer)
+
+PulsarEx.sync_produce("persistent://public/default/10000.json", "test")
