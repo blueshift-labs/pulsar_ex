@@ -51,7 +51,7 @@ defmodule PulsarEx.PartitionedProducerManager do
         Process.send_after(self(), :refresh, refresh_interval + :rand.uniform(refresh_interval))
 
         0..(partitions - 1)
-        |> Enum.reduce(:ok, fn partition, :ok ->
+        |> Enum.reduce_while(:ok, fn partition, :ok ->
           DynamicSupervisor.start_child(
             sup,
             pool_spec(%{topic | partition: partition}, producer_opts)

@@ -71,12 +71,12 @@ defmodule PulsarEx.Connection do
     GenServer.call(conn, {:create_producer, topic, opts})
   end
 
-  def send_message(conn, %ProducerMessage{} = message) do
-    GenServer.call(conn, {:send, message})
+  def send_message(conn, %ProducerMessage{} = message, timeout) do
+    GenServer.call(conn, {:send, message}, timeout)
   end
 
-  def send_messages(conn, messages) when is_list(messages) do
-    GenServer.call(conn, {:send, messages})
+  def send_messages(conn, messages, timeout) when is_list(messages) do
+    GenServer.call(conn, {:send, messages}, timeout)
   end
 
   def subscribe(conn, topic, subscription, sub_type, opts \\ []) do
@@ -91,8 +91,8 @@ defmodule PulsarEx.Connection do
     GenServer.call(conn, {:redeliver, consumer_id, msg_ids})
   end
 
-  def ack(conn, consumer_id, ack_type, msg_ids) do
-    GenServer.call(conn, {:ack, consumer_id, ack_type, msg_ids})
+  def ack(conn, consumer_id, ack_type, msg_ids, timeout) do
+    GenServer.call(conn, {:ack, consumer_id, ack_type, msg_ids}, timeout)
   end
 
   def lookup_partitions(conn, topic) do

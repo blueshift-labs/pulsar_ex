@@ -18,6 +18,7 @@ defmodule PulsarEx.Consumer do
       :poll_interval,
       :refresh_interval,
       :ack_interval,
+      :ack_timeout,
       :redelivery_interval,
       :dead_letter_interval,
       :dead_letter_attempts,
@@ -59,6 +60,7 @@ defmodule PulsarEx.Consumer do
       :poll_interval,
       :refresh_interval,
       :ack_interval,
+      :ack_timeout,
       :redelivery_interval,
       :dead_letter_interval,
       :dead_letter_attempts,
@@ -121,6 +123,7 @@ defmodule PulsarEx.Consumer do
       @poll_interval Keyword.get(opts, :poll_interval, 50)
       @refresh_interval Keyword.get(opts, :refresh_interval, 60_000)
       @ack_interval Keyword.get(opts, :ack_interval, 5_000)
+      @ack_timeout Keyword.get(opts, :ack_timeout, 5_000)
       @redelivery_interval Keyword.get(opts, :redelivery_interval, 1_000)
       @dead_letter_interval Keyword.get(opts, :dead_letter_interval, 5_000)
       @max_dead_letter_attempts Keyword.get(opts, :max_dead_letter_attempts, 5)
@@ -184,6 +187,8 @@ defmodule PulsarEx.Consumer do
 
         ack_interval = max(Keyword.get(consumer_opts, :ack_interval, @ack_interval), 1_000)
 
+        ack_timeout = min(Keyword.get(consumer_opts, :ack_timeout, @ack_timeout), 10_000)
+
         redelivery_interval =
           max(Keyword.get(consumer_opts, :redelivery_interval, @redelivery_interval), 1_000)
 
@@ -220,6 +225,7 @@ defmodule PulsarEx.Consumer do
           poll_interval: poll_interval,
           refresh_interval: refresh_interval,
           ack_interval: ack_interval,
+          ack_timeout: ack_timeout,
           redelivery_interval: redelivery_interval,
           dead_letter_interval: dead_letter_interval,
           dead_letter_attempts: 0,
@@ -353,7 +359,13 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:acks, %{acks: acks} = state) do
-        case Connection.ack(state.connection, state.consumer_id, :individual, acks) do
+        case Connection.ack(
+               state.connection,
+               state.consumer_id,
+               :individual,
+               acks,
+               state.ack_timeout
+             ) do
           :ok ->
             Logger.debug(
               "Sent #{length(acks)} acks from consumer #{state.consumer_id} for topic #{

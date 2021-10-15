@@ -9,6 +9,7 @@ defmodule PulsarEx.PartitionedProducer do
       :batch_size,
       :flush_interval,
       :refresh_interval,
+      :send_timeout,
       :termination_timeout,
       :queue,
       :producer_opts
@@ -31,6 +32,7 @@ defmodule PulsarEx.PartitionedProducer do
       :batch_size,
       :flush_interval,
       :refresh_interval,
+      :send_timeout,
       :termination_timeout,
       :queue,
       :producer_opts
@@ -47,6 +49,7 @@ defmodule PulsarEx.PartitionedProducer do
   @batch_enabled false
   @batch_size 100
   @flush_interval 100
+  @send_timeout 5_000
   @termination_timeout 3_000
 
   def produce(pid, payload, message_opts, true) do
@@ -66,7 +69,7 @@ defmodule PulsarEx.PartitionedProducer do
     Process.flag(:trap_exit, true)
 
     topic_name = Topic.to_name(topic)
-    Logger.debug("Starting producer for topic #{topic_name}")
+    Logger.debug("Starting producer with topic #{topic_name}")
 
     brokers = Application.fetch_env!(:pulsar_ex, :brokers)
     admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
@@ -83,6 +86,7 @@ defmodule PulsarEx.PartitionedProducer do
       flush_interval: max(Keyword.get(producer_opts, :flush_interval, @flush_interval), 100),
       refresh_interval:
         max(Keyword.get(producer_opts, :refresh_interval, @refresh_interval), 10_000),
+      send_timeout: min(Keyword.get(producer_opts, :send_timeout, @send_timeout), 10_000),
       termination_timeout:
         min(Keyword.get(producer_opts, :termination_timeout, @termination_timeout), 5_000),
       queue: :queue.new()
@@ -136,7 +140,7 @@ defmodule PulsarEx.PartitionedProducer do
         Process.send_after(self(), :flush, state.flush_interval)
       end
 
-      Logger.debug("Initialized producer for topic #{state.topic_name}")
+      Logger.debug("Initialized producer #{state.producer_id} with topic #{state.topic_name}")
 
       {:noreply, state}
     else
@@ -147,18 +151,22 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_info({:DOWN, _, _, _, _}, %{topic_name: topic_name} = state) do
-    Logger.error("Connection down for producer with topic #{topic_name}")
+    Logger.error("Connection down for producer #{state.producer_id} with topic #{topic_name}")
 
     {:stop, {:error, :connection_down}, state}
   end
 
   @impl true
   def handle_info(:refresh, %{broker: broker, topic_name: topic_name} = state) do
-    Logger.debug("Refreshing broker connection for topic #{topic_name}")
+    Logger.debug(
+      "Refreshing broker connection for producer #{state.producer_id} with topic #{topic_name}"
+    )
 
     case Admin.lookup_topic(state.brokers, state.admin_port, state.topic) do
       {:ok, ^broker} ->
-        Logger.debug("Unerlying broker unchanged for topic #{topic_name}")
+        Logger.debug(
+          "Unerlying broker unchanged for producer #{state.producer_id} with topic #{topic_name}"
+        )
 
         Process.send_after(
           self(),
@@ -170,13 +178,17 @@ defmodule PulsarEx.PartitionedProducer do
 
       {:error, err} ->
         Logger.error(
-          "Error refreshing topic broker from producer for topic #{topic_name}, #{inspect(err)}"
+          "Error refreshing topic broker for producer #{state.producer_id} with topic #{
+            topic_name
+          }, #{inspect(err)}"
         )
 
         {:stop, {:error, err}, state}
 
       _ ->
-        Logger.warn("Unerlying broker changed for producer with topic #{topic_name}")
+        Logger.warn(
+          "Unerlying broker changed for producer #{state.producer_id} with topic #{topic_name}"
+        )
 
         {:stop, {:error, :broker_changed}, state}
     end
@@ -187,7 +199,7 @@ defmodule PulsarEx.PartitionedProducer do
     if :queue.len(state.queue) > 0 do
       {messages, froms} = :queue.to_list(state.queue) |> Enum.unzip()
 
-      reply = Connection.send_messages(state.connection, messages)
+      reply = Connection.send_messages(state.connection, messages, state.send_timeout)
       Task.async_stream(froms, &reply(&1, reply)) |> Enum.count()
 
       Process.send_after(self(), :flush, state.flush_interval)
@@ -213,7 +225,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_call({:produce, payload, %{} = message_opts}, _from, %{batch_enabled: false} = state) do
     {message, state} = create_message(payload, message_opts, state)
-    reply = Connection.send_message(state.connection, message)
+    reply = Connection.send_message(state.connection, message, state.send_timeout)
 
     {:reply, reply, state}
   end
@@ -230,7 +242,7 @@ defmodule PulsarEx.PartitionedProducer do
       true ->
         {messages, froms} = :queue.to_list(queue) |> Enum.unzip()
 
-        reply = Connection.send_messages(state.connection, messages)
+        reply = Connection.send_messages(state.connection, messages, state.send_timeout)
         Task.async_stream(froms, &reply(&1, reply)) |> Enum.count()
 
         {:noreply, %{state | queue: :queue.new()}}
@@ -240,21 +252,25 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_call({:produce, payload, message_opts}, _from, state) do
     {message, state} = create_message(payload, message_opts, state)
-    reply = Connection.send_message(state.connection, message)
+    reply = Connection.send_message(state.connection, message, state.send_timeout)
 
     {:reply, reply, state}
   end
 
   @impl true
   def handle_cast(:close, %{topic_name: topic_name} = state) do
-    Logger.warn("Received close command from connection for topic #{topic_name}")
+    Logger.warn(
+      "Received close command from connection for producer #{state.producer_id} with topic #{
+        topic_name
+      }"
+    )
 
     {:stop, {:shutdown, :close}, state}
   end
 
   @impl true
   def handle_cast({:produce, _, _}, %{state: :init} = state) do
-    Logger.error("Producer not ready for topic #{state.topic_name}")
+    Logger.error("Producer not ready with topic #{state.topic_name}")
     {:noreply, state}
   end
 
@@ -266,7 +282,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast({:produce, payload, %{} = message_opts}, %{batch_enabled: false} = state) do
     {message, state} = create_message(payload, message_opts, state)
-    Connection.send_message(state.connection, message)
+    Connection.send_message(state.connection, message, state.send_timeout)
 
     {:noreply, state}
   end
@@ -283,7 +299,7 @@ defmodule PulsarEx.PartitionedProducer do
       true ->
         {messages, froms} = :queue.to_list(queue) |> Enum.unzip()
 
-        reply = Connection.send_messages(state.connection, messages)
+        reply = Connection.send_messages(state.connection, messages, state.send_timeout)
         Task.async_stream(froms, &reply(&1, reply)) |> Enum.count()
 
         {:noreply, %{state | queue: :queue.new()}}
@@ -293,7 +309,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast({:produce, payload, message_opts}, state) do
     {message, state} = create_message(payload, message_opts, state)
-    Connection.send_message(state.connection, message)
+    Connection.send_message(state.connection, message, state.send_timeout)
 
     {:noreply, state}
   end
@@ -346,7 +362,7 @@ defmodule PulsarEx.PartitionedProducer do
 
     if len > 0 do
       Logger.error(
-        "Sending closed error to #{len} remaining message in producer for topic #{
+        "Sending closed error to #{len} remaining message for producer #{state.producer_id} with topic #{
           state.topic_name
         }"
       )
@@ -358,25 +374,40 @@ defmodule PulsarEx.PartitionedProducer do
 
     case reason do
       :shutdown ->
-        Logger.debug("Stopping producer for topic #{topic_name}, #{inspect(reason)}")
+        Logger.debug(
+          "Stopping producer #{state.producer_id} with topic #{topic_name}, #{inspect(reason)}"
+        )
+
         state
 
       :normal ->
-        Logger.debug("Stopping producer for topic #{topic_name}, #{inspect(reason)}")
+        Logger.debug(
+          "Stopping producer #{state.producer_id} with topic #{topic_name}, #{inspect(reason)}"
+        )
+
         state
 
       {:shutdown, :close} ->
-        Logger.debug("Stopping producer for topic #{topic_name}, #{inspect(reason)}")
+        Logger.debug(
+          "Stopping producer #{state.producer_id} with topic #{topic_name}, #{inspect(reason)}"
+        )
+
         # avoid immediate recreate on broker
         Process.sleep(state.termination_timeout)
         state
 
       {:shutdown, _} ->
-        Logger.debug("Stopping producer for topic #{topic_name}, #{inspect(reason)}")
+        Logger.debug(
+          "Stopping producer #{state.producer_id} with topic #{topic_name}, #{inspect(reason)}"
+        )
+
         state
 
       _ ->
-        Logger.error("Stopping producer for topic #{topic_name}, #{inspect(reason)}")
+        Logger.error(
+          "Stopping producer #{state.producer_id} with topic #{topic_name}, #{inspect(reason)}"
+        )
+
         # avoid immediate recreate on broker
         Process.sleep(state.termination_timeout)
         state
