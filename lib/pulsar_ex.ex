@@ -13,12 +13,30 @@ defmodule PulsarEx do
     ConsumerMessage
   }
 
+  @retry_delay 500
+  @max_retry 5
+
   def sync_produce(topic_name, payload, message_opts \\ [], producer_opts \\ []) do
-    produce(true, topic_name, payload, message_opts, producer_opts)
+    retry_produce(true, topic_name, payload, message_opts, producer_opts)
   end
 
   def async_produce(topic_name, payload, message_opts \\ [], producer_opts \\ []) do
-    produce(false, topic_name, payload, message_opts, producer_opts)
+    retry_produce(false, topic_name, payload, message_opts, producer_opts)
+  end
+
+  defp retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts \\ 0) do
+    case produce(sync?, topic_name, payload, message_opts, producer_opts) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, _} = err ->
+        if attempts >= @max_retry do
+          err
+        else
+          Process.sleep(@retry_delay)
+          retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts + 1)
+        end
+    end
   end
 
   defp produce(sync?, topic_name, payload, message_opts, producer_opts) do
