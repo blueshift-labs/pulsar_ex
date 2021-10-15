@@ -20,6 +20,8 @@ defmodule PulsarEx.Consumer do
       :ack_interval,
       :redelivery_interval,
       :dead_letter_interval,
+      :dead_letter_attempts,
+      :max_dead_letter_attempts,
       :termination_timeout,
       :permits,
       :queue,
@@ -59,6 +61,8 @@ defmodule PulsarEx.Consumer do
       :ack_interval,
       :redelivery_interval,
       :dead_letter_interval,
+      :dead_letter_attempts,
+      :max_dead_letter_attempts,
       :termination_timeout,
       :permits,
       :queue,
@@ -119,6 +123,7 @@ defmodule PulsarEx.Consumer do
       @ack_interval Keyword.get(opts, :ack_interval, 5_000)
       @redelivery_interval Keyword.get(opts, :redelivery_interval, 1_000)
       @dead_letter_interval Keyword.get(opts, :dead_letter_interval, 5_000)
+      @max_dead_letter_attempts Keyword.get(opts, :max_dead_letter_attempts, 5)
       @dead_letter_producer_opts Keyword.get(opts, :dead_letter_producer_opts,
                                    batch_enabled: true,
                                    batch_size: 100,
@@ -185,6 +190,12 @@ defmodule PulsarEx.Consumer do
         dead_letter_interval =
           max(Keyword.get(consumer_opts, :dead_letter_interval, @dead_letter_interval), 5_000)
 
+        max_dead_letter_attempts =
+          min(
+            Keyword.get(consumer_opts, :max_dead_letter_attempts, @max_dead_letter_attempts),
+            10
+          )
+
         dead_letter_producer_opts =
           Keyword.get(consumer_opts, :dead_letter_producer_opts, @dead_letter_producer_opts)
 
@@ -211,6 +222,8 @@ defmodule PulsarEx.Consumer do
           ack_interval: ack_interval,
           redelivery_interval: redelivery_interval,
           dead_letter_interval: dead_letter_interval,
+          dead_letter_attempts: 0,
+          max_dead_letter_attempts: max_dead_letter_attempts,
           termination_timeout: termination_timeout,
           permits: receiving_queue_size,
           queue: :queue.new(),
@@ -427,9 +440,9 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:dead_letters, %{dead_letters: dead_letters} = state) do
-        reciept =
+        {err, dead_letters} =
           dead_letters
-          |> Task.async_stream(fn message ->
+          |> Enum.reduce({nil, []}, fn message, {err, remain} ->
             message_opts =
               Map.take(message, [:properties, :partition_key, :ordering_key, :event_time])
 
@@ -439,16 +452,14 @@ defmodule PulsarEx.Consumer do
               message_opts,
               state.dead_letter_producer_opts
             )
-          end)
-          |> Enum.reduce(:ok, fn
-            {:ok, :ok}, :ok -> :ok
-            {:ok, {:error, err}}, :ok -> {:error, err}
-            {:exit, err}, :ok -> {:error, err}
-            _, {:error, err} -> {:error, err}
+            |> case do
+              :ok -> {err, remain}
+              {:error, error} -> {err || error, [message | remain]}
+            end
           end)
 
-        case reciept do
-          :ok ->
+        case err do
+          nil ->
             Logger.warn(
               "Sent #{length(dead_letters)} dead letters to topic #{state.dead_letter_topic}, from consumer #{
                 state.consumer_id
@@ -457,16 +468,29 @@ defmodule PulsarEx.Consumer do
 
             Process.send_after(self(), :dead_letters, state.dead_letter_interval)
 
-            {:noreply, %{state | dead_letters: []}}
+            {:noreply, %{state | dead_letters: [], dead_letter_attempts: 0}}
 
-          {:error, err} ->
+          _ ->
             Logger.error(
               "Error senting #{length(dead_letters)} dead letters to topic #{
                 state.dead_letter_topic
-              }, from consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(err)}"
+              }, from consumer #{state.consumer_id} for topic #{state.topic_name} with #{
+                state.dead_letter_attempts
+              } attempts, #{inspect(err)}"
             )
 
-            {:stop, {:error, err}, state}
+            state = %{
+              state
+              | dead_letters: dead_letters,
+                dead_letter_attempts: state.dead_letter_attempts + 1
+            }
+
+            if state.dead_letter_attempts < state.max_dead_letter_attempts do
+              Process.send_after(self(), :dead_letters, state.dead_letter_interval)
+              {:noreply, state}
+            else
+              {:stop, {:error, err}, state}
+            end
         end
       end
 
@@ -829,6 +853,17 @@ defmodule PulsarEx.Consumer do
               }"
             )
 
+            state
+
+          {:shutdown, :close} ->
+            Logger.debug(
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
+                inspect(reason)
+              }"
+            )
+
+            # avoid immediate recreate on broker
+            Process.sleep(state.termination_timeout)
             state
 
           {:shutdown, _} ->

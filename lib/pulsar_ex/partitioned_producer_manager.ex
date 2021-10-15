@@ -50,24 +50,18 @@ defmodule PulsarEx.PartitionedProducerManager do
       if partitions > 0 do
         Process.send_after(self(), :refresh, refresh_interval + :rand.uniform(refresh_interval))
 
-        result =
-          0..(partitions - 1)
-          |> Task.async_stream(
-            fn partition ->
-              DynamicSupervisor.start_child(
-                sup,
-                pool_spec(%{topic | partition: partition}, producer_opts)
-              )
-            end,
-            max_concurrency: 8
+        0..(partitions - 1)
+        |> Enum.reduce(:ok, fn partition, :ok ->
+          DynamicSupervisor.start_child(
+            sup,
+            pool_spec(%{topic | partition: partition}, producer_opts)
           )
-          |> Enum.reduce_while(:ok, fn
-            {:ok, {:ok, _}}, :ok -> {:cont, :ok}
-            {:ok, {:error, _} = err}, :ok -> {:halt, err}
-            {:exit, err}, :ok -> {:halt, err}
-          end)
-
-        case result do
+          |> case do
+            {:ok, _} -> {:cont, :ok}
+            err -> {:halt, err}
+          end
+        end)
+        |> case do
           :ok ->
             :ets.insert(lookup, {topic_name, {topic, partitions}})
 
@@ -84,8 +78,8 @@ defmodule PulsarEx.PartitionedProducerManager do
 
             {:ok, state}
 
-          _ ->
-            {:stop, result}
+          err ->
+            {:stop, err}
         end
       else
         DynamicSupervisor.start_child(sup, pool_spec(topic, producer_opts))

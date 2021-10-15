@@ -65,6 +65,9 @@ defmodule PulsarEx.PartitionedProducer do
   def init({%Topic{} = topic, producer_opts}) do
     Process.flag(:trap_exit, true)
 
+    topic_name = Topic.to_name(topic)
+    Logger.debug("Starting producer for topic #{topic_name}")
+
     brokers = Application.fetch_env!(:pulsar_ex, :brokers)
     admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
 
@@ -73,6 +76,7 @@ defmodule PulsarEx.PartitionedProducer do
       brokers: brokers,
       admin_port: admin_port,
       topic: topic,
+      topic_name: topic_name,
       producer_opts: producer_opts,
       batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
       batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
@@ -98,7 +102,6 @@ defmodule PulsarEx.PartitionedProducer do
              &Connection.create_producer(&1, Topic.to_name(state.topic), state.producer_opts)
            ) do
       %{
-        topic: topic_name,
         producer_id: producer_id,
         producer_name: producer_name,
         producer_access_mode: producer_access_mode,
@@ -120,7 +123,6 @@ defmodule PulsarEx.PartitionedProducer do
         state
         | state: :ready,
           broker: broker,
-          topic_name: topic_name,
           producer_id: producer_id,
           producer_name: producer_name,
           producer_access_mode: producer_access_mode,
@@ -134,7 +136,7 @@ defmodule PulsarEx.PartitionedProducer do
         Process.send_after(self(), :flush, state.flush_interval)
       end
 
-      Logger.debug("Started producer for topic #{topic_name}")
+      Logger.debug("Initialized producer for topic #{state.topic_name}")
 
       {:noreply, state}
     else
@@ -200,7 +202,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_call({:produce, _, _}, _from, %{state: :init} = state) do
-    {:reply, {:error, :not_ready}, state}
+    {:reply, {:error, :producer_not_ready}, state}
   end
 
   @impl true
@@ -361,6 +363,12 @@ defmodule PulsarEx.PartitionedProducer do
 
       :normal ->
         Logger.debug("Stopping producer for topic #{topic_name}, #{inspect(reason)}")
+        state
+
+      {:shutdown, :close} ->
+        Logger.debug("Stopping producer for topic #{topic_name}, #{inspect(reason)}")
+        # avoid immediate recreate on broker
+        Process.sleep(state.termination_timeout)
         state
 
       {:shutdown, _} ->
