@@ -367,7 +367,7 @@ defmodule PulsarEx.Connection do
         requests =
           Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
 
-        {:noreply, %{state | requests: requests}}
+        {:reply, {:ok, request.request_id}, %{state | requests: requests}}
 
       {:error, _} = err ->
         {:disconnect, err, err, state}
@@ -898,7 +898,7 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%CommandAckResponse{request_id: request_id, error: nil}, _, state) do
-    {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
+    {{{pid, _}, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
     latency = Timex.diff(Timex.now(), ts, :milliseconds)
@@ -909,15 +909,13 @@ defmodule PulsarEx.Connection do
       }ms"
     )
 
-    if from != nil do
-      GenServer.reply(from, :ok)
-    end
+    GenServer.cast(pid, {:ack_response, {:ok, request_id}})
 
     state
   end
 
   defp handle_command(%CommandAckResponse{request_id: request_id, error: err}, _, state) do
-    {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
+    {{{pid, _}, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
     latency = Timex.diff(Timex.now(), ts, :milliseconds)
@@ -928,9 +926,7 @@ defmodule PulsarEx.Connection do
       }, after #{latency}ms"
     )
 
-    if from != nil do
-      GenServer.reply(from, {:error, err})
-    end
+    GenServer.cast(pid, {:ack_response, {:error, err, request_id}})
 
     state
   end

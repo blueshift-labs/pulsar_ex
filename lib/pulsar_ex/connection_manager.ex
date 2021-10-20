@@ -51,12 +51,10 @@ defmodule PulsarEx.ConnectionManager do
     case DynamicSupervisor.start_child(Connections, pool_spec(broker)) do
       {:error, {:already_started, _}} ->
         Logger.debug("Connections already started for broker #{Broker.to_name(broker)}")
-
         :ok
 
       {:ok, _} ->
         Logger.debug("Connections started for broker #{Broker.to_name(broker)}")
-
         :ok
 
       {:error, err} ->

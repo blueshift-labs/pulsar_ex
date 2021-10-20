@@ -17,19 +17,71 @@ defmodule PulsarEx do
   @max_attempts 5
 
   def sync_produce(topic_name, payload, message_opts \\ [], producer_opts \\ []) do
-    retry_produce(true, topic_name, payload, message_opts, producer_opts)
+    start = System.monotonic_time()
+
+    reply = retry_produce(true, topic_name, payload, message_opts, producer_opts)
+
+    case reply do
+      {:ok, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :sync_produce, :success],
+          %{count: 1, duration: System.monotonic_time() - start},
+          %{topic: topic_name}
+        )
+
+      _ ->
+        :telemetry.execute(
+          [:pulsar_ex, :sync_produce, :error],
+          %{count: 1, duration: System.monotonic_time() - start},
+          %{topic: topic_name}
+        )
+    end
+
+    reply
   end
 
   def async_produce(topic_name, payload, message_opts \\ [], producer_opts \\ []) do
-    retry_produce(false, topic_name, payload, message_opts, producer_opts)
+    start = System.monotonic_time()
+
+    reply = retry_produce(false, topic_name, payload, message_opts, producer_opts)
+
+    case reply do
+      :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :async_produce, :success],
+          %{count: 1, duration: System.monotonic_time() - start},
+          %{topic: topic_name}
+        )
+
+      _ ->
+        :telemetry.execute(
+          [:pulsar_ex, :async_produce, :error],
+          %{count: 1, duration: System.monotonic_time() - start},
+          %{topic: topic_name}
+        )
+    end
+
+    reply
   end
 
   # in the event of topic rebalancing, producer will take time to reconnect
   defp retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts \\ 1) do
+    :telemetry.execute(
+      [:pulsar_ex, :retry_produce],
+      %{attempts: attempts},
+      %{topic: topic_name}
+    )
+
     try do
       produce(sync?, topic_name, payload, message_opts, producer_opts)
     catch
       :exit, reason ->
+        :telemetry.execute(
+          [:pulsar_ex, :retry_produce, :exit],
+          %{count: 1},
+          %{topic: topic_name}
+        )
+
         if attempts >= @max_attempts do
           {:error, reason}
         else

@@ -30,6 +30,7 @@ defmodule PulsarEx.Consumer do
       :queue_size,
       :batch,
       :acks,
+      :pending_acks,
       :nacks,
       :dead_letters,
       :passive_mode,
@@ -73,6 +74,7 @@ defmodule PulsarEx.Consumer do
       :queue_size,
       :batch,
       :acks,
+      :pending_acks,
       :nacks,
       :dead_letters,
       :passive_mode,
@@ -134,7 +136,7 @@ defmodule PulsarEx.Consumer do
                                    batch_size: 100,
                                    flush_interval: 1_000
                                  )
-      @termination_timeout Keyword.get(opts, :termination_timeout, 3_000)
+      @termination_timeout Keyword.get(opts, :termination_timeout, 1000)
 
       def start_link({topic, subscription, consumer_opts}) do
         GenServer.start_link(__MODULE__, {topic, subscription, consumer_opts})
@@ -239,6 +241,7 @@ defmodule PulsarEx.Consumer do
           queue_size: 0,
           batch: [],
           acks: [],
+          pending_acks: %{},
           nacks: [],
           dead_letters: [],
           passive_mode: passive_mode,
@@ -250,20 +253,30 @@ defmodule PulsarEx.Consumer do
         {:ok, state}
       end
 
+      defp subscribe(pool, topic_name, subscription, subscription_type, consumer_opts) do
+        connection = :poolboy.checkout(pool)
+        :poolboy.checkin(pool, connection)
+
+        Connection.subscribe(
+          connection,
+          topic_name,
+          subscription,
+          subscription_type,
+          consumer_opts
+        )
+      end
+
       @impl true
       def handle_info(:init, %{state: :init} = state) do
         with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
              {:ok, pool} <- ConnectionManager.get_connection(broker),
              {:ok, reply} <-
-               :poolboy.transaction(
+               subscribe(
                  pool,
-                 &Connection.subscribe(
-                   &1,
-                   state.topic_name,
-                   state.subscription,
-                   state.subscription_type,
-                   state.consumer_opts
-                 )
+                 state.topic_name,
+                 state.subscription,
+                 state.subscription_type,
+                 state.consumer_opts
                ) do
           %{
             priority_level: priority_level,
@@ -369,7 +382,7 @@ defmodule PulsarEx.Consumer do
                acks,
                state.ack_timeout
              ) do
-          :ok ->
+          {:ok, request_id} ->
             Logger.debug(
               "Sent #{length(acks)} acks from consumer #{state.consumer_id} for topic #{
                 state.topic_name
@@ -377,7 +390,9 @@ defmodule PulsarEx.Consumer do
             )
 
             Process.send_after(self(), :acks, state.ack_interval)
-            {:noreply, %{state | acks: []}}
+
+            {:noreply,
+             %{state | acks: [], pending_acks: Map.put(state.pending_acks, request_id, acks)}}
 
           {:error, err} ->
             Logger.error(
@@ -769,6 +784,22 @@ defmodule PulsarEx.Consumer do
           end)
 
         {:noreply, %{state | nacks: state.nacks ++ nacks}}
+      end
+
+      @impl true
+      def handle_cast({:ack_response, {:ok, request_id}}, state) do
+        {acks, pending_acks} = Map.pop(state.pending_acks, request_id, [])
+        Logger.debug("Received successful ack response for #{length(acks)} acks")
+
+        {:noreply, %{state | pending_acks: pending_acks}}
+      end
+
+      @impl true
+      def handle_cast({:ack_response, {:error, err, request_id}}, state) do
+        {acks, pending_acks} = Map.pop(state.pending_acks, request_id, [])
+        Logger.error("Received failed ack response for #{length(acks)} acks, #{inspect(err)}")
+
+        {:noreply, %{state | pending_acks: pending_acks, acks: state.acks ++ acks}}
       end
 
       defp flow_permits(

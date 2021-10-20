@@ -5,6 +5,9 @@ defmodule PulsarEx.PartitionedProducer do
       :brokers,
       :admin_port,
       :topic,
+      :topic_name,
+      :topic_logical_name,
+      :partition,
       :batch_enabled,
       :batch_size,
       :flush_interval,
@@ -20,6 +23,9 @@ defmodule PulsarEx.PartitionedProducer do
       :admin_port,
       :topic,
       :topic_name,
+      :topic_logical_name,
+      :partition,
+      :metadata,
       :broker,
       :connection,
       :producer_id,
@@ -50,7 +56,7 @@ defmodule PulsarEx.PartitionedProducer do
   @batch_size 100
   @flush_interval 100
   @send_timeout 5_000
-  @termination_timeout 3_000
+  @termination_timeout 1000
 
   def produce(pid, payload, message_opts, true) do
     GenServer.call(pid, {:produce, payload, message_opts})
@@ -74,12 +80,23 @@ defmodule PulsarEx.PartitionedProducer do
     brokers = Application.fetch_env!(:pulsar_ex, :brokers)
     admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
 
+    topic_logical_name = Topic.to_logical_name(topic)
+
+    metadata =
+      if topic.partition == nil do
+        %{topic: topic_logical_name}
+      else
+        %{topic: topic_logical_name, partition: topic.partition}
+      end
+
     state = %State{
       state: :init,
       brokers: brokers,
       admin_port: admin_port,
       topic: topic,
       topic_name: topic_name,
+      topic_logical_name: Topic.to_logical_name(topic),
+      partition: topic.partition,
       producer_opts: producer_opts,
       batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
       batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
@@ -89,22 +106,26 @@ defmodule PulsarEx.PartitionedProducer do
       send_timeout: min(Keyword.get(producer_opts, :send_timeout, @send_timeout), 10_000),
       termination_timeout:
         min(Keyword.get(producer_opts, :termination_timeout, @termination_timeout), 5_000),
-      queue: :queue.new()
+      queue: :queue.new(),
+      metadata: metadata
     }
 
     Process.send(self(), :init, [])
     {:ok, state}
   end
 
+  defp create_producer(pool, topic_name, producer_opts) do
+    connection = :poolboy.checkout(pool)
+    :poolboy.checkin(pool, connection)
+
+    Connection.create_producer(connection, topic_name, producer_opts)
+  end
+
   @impl true
   def handle_info(:init, %{state: :init} = state) do
     with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
          {:ok, pool} <- ConnectionManager.get_connection(broker),
-         {:ok, reply} <-
-           :poolboy.transaction(
-             pool,
-             &Connection.create_producer(&1, Topic.to_name(state.topic), state.producer_opts)
-           ) do
+         {:ok, reply} <- create_producer(pool, Topic.to_name(state.topic), state.producer_opts) do
       %{
         producer_id: producer_id,
         producer_name: producer_name,
@@ -123,6 +144,11 @@ defmodule PulsarEx.PartitionedProducer do
         state.refresh_interval + :rand.uniform(state.refresh_interval)
       )
 
+      metadata =
+        properties
+        |> Enum.into(%{}, fn {k, v} -> {String.to_atom(k), v} end)
+        |> Map.merge(state.metadata)
+
       state = %{
         state
         | state: :ready,
@@ -133,7 +159,8 @@ defmodule PulsarEx.PartitionedProducer do
           last_sequence_id: last_sequence_id,
           max_message_size: max_message_size,
           properties: properties,
-          connection: connection
+          connection: connection,
+          metadata: metadata
       }
 
       if state.batch_enabled do
@@ -142,9 +169,21 @@ defmodule PulsarEx.PartitionedProducer do
 
       Logger.debug("Initialized producer #{state.producer_id} with topic #{state.topic_name}")
 
+      :telemetry.execute(
+        [:pulsar_ex, :producer, :init, :success],
+        %{count: 1},
+        metadata
+      )
+
       {:noreply, state}
     else
       err ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :init, :error],
+          %{count: 1},
+          state.metadata
+        )
+
         {:stop, err, state}
     end
   end
@@ -197,10 +236,18 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_info(:flush, state) do
     if :queue.len(state.queue) > 0 do
+      start = System.monotonic_time()
+
       {messages, froms} = :queue.to_list(state.queue) |> Enum.unzip()
 
       reply = Connection.send_messages(state.connection, messages, state.send_timeout)
       Task.async_stream(froms, &reply(&1, reply)) |> Enum.count()
+
+      :telemetry.execute(
+        [:pulsar_ex, :producer, :flush],
+        %{count: 1, messages: length(messages), duration: System.monotonic_time() - start},
+        state.metadata
+      )
 
       Process.send_after(self(), :flush, state.flush_interval)
 
@@ -224,8 +271,16 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_call({:produce, payload, %{} = message_opts}, _from, %{batch_enabled: false} = state) do
+    start = System.monotonic_time()
+
     {message, state} = create_message(payload, message_opts, state)
     reply = Connection.send_message(state.connection, message, state.send_timeout)
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send],
+      %{count: 1, duration: System.monotonic_time() - start},
+      state.metadata
+    )
 
     {:reply, reply, state}
   end
@@ -240,10 +295,18 @@ defmodule PulsarEx.PartitionedProducer do
         {:noreply, %{state | queue: queue}}
 
       true ->
+        start = System.monotonic_time()
+
         {messages, froms} = :queue.to_list(queue) |> Enum.unzip()
 
         reply = Connection.send_messages(state.connection, messages, state.send_timeout)
         Task.async_stream(froms, &reply(&1, reply)) |> Enum.count()
+
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :flush],
+          %{count: 1, messages: length(messages), duration: System.monotonic_time() - start},
+          state.metadata
+        )
 
         {:noreply, %{state | queue: :queue.new()}}
     end
@@ -251,8 +314,16 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_call({:produce, payload, message_opts}, _from, state) do
+    start = System.monotonic_time()
+
     {message, state} = create_message(payload, message_opts, state)
     reply = Connection.send_message(state.connection, message, state.send_timeout)
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send],
+      %{count: 1, duration: System.monotonic_time() - start},
+      state.metadata
+    )
 
     {:reply, reply, state}
   end
@@ -281,8 +352,16 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_cast({:produce, payload, %{} = message_opts}, %{batch_enabled: false} = state) do
+    start = System.monotonic_time()
+
     {message, state} = create_message(payload, message_opts, state)
     Connection.send_message(state.connection, message, state.send_timeout)
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send],
+      %{count: 1, duration: System.monotonic_time() - start},
+      state.metadata
+    )
 
     {:noreply, state}
   end
@@ -297,10 +376,18 @@ defmodule PulsarEx.PartitionedProducer do
         {:noreply, %{state | queue: queue}}
 
       true ->
+        start = System.monotonic_time()
+
         {messages, froms} = :queue.to_list(queue) |> Enum.unzip()
 
         reply = Connection.send_messages(state.connection, messages, state.send_timeout)
         Task.async_stream(froms, &reply(&1, reply)) |> Enum.count()
+
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :flush],
+          %{count: 1, messages: length(messages), duration: System.monotonic_time() - start},
+          state.metadata
+        )
 
         {:noreply, %{state | queue: :queue.new()}}
     end
@@ -308,8 +395,16 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_cast({:produce, payload, message_opts}, state) do
+    start = System.monotonic_time()
+
     {message, state} = create_message(payload, message_opts, state)
     Connection.send_message(state.connection, message, state.send_timeout)
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send],
+      %{count: 1, duration: System.monotonic_time() - start},
+      state.metadata
+    )
 
     {:noreply, state}
   end
@@ -392,6 +487,12 @@ defmodule PulsarEx.PartitionedProducer do
           "Stopping producer #{state.producer_id} with topic #{topic_name}, #{inspect(reason)}"
         )
 
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :close],
+          %{count: 1},
+          state.metadata
+        )
+
         # avoid immediate recreate on broker
         Process.sleep(state.termination_timeout)
         state
@@ -406,6 +507,12 @@ defmodule PulsarEx.PartitionedProducer do
       _ ->
         Logger.error(
           "Stopping producer #{state.producer_id} with topic #{topic_name}, #{inspect(reason)}"
+        )
+
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :exit],
+          %{count: 1},
+          state.metadata
         )
 
         # avoid immediate recreate on broker

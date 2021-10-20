@@ -32,7 +32,7 @@ config :pulsar_ex,
       producer_access_mode: :shared,
       properties: [test: true],
       refresh_interval: 15_000,
-      num_producers: 2,
+      num_producers: 20,
       termination_timeout: 3_000
     ]
   ],
