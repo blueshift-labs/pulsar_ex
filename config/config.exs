@@ -20,7 +20,7 @@ config :pulsar_ex,
     flush_interval: 1_000,
     properties: [client: "pulsar_ex"],
     refresh_interval: 10_000,
-    num_producers: 3
+    num_producers: 1
   ],
   consumer_opts: [
     auto_start: false,

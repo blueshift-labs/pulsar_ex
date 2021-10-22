@@ -71,12 +71,12 @@ defmodule PulsarEx.Connection do
     GenServer.call(conn, {:create_producer, topic, opts})
   end
 
-  def send_message(conn, %ProducerMessage{} = message, timeout) do
-    GenServer.call(conn, {:send, message}, timeout)
+  def send_message(conn, %ProducerMessage{} = message) do
+    GenServer.call(conn, {:send, message})
   end
 
-  def send_messages(conn, messages, timeout) when is_list(messages) do
-    GenServer.call(conn, {:send, messages}, timeout)
+  def send_messages(conn, messages) when is_list(messages) do
+    GenServer.call(conn, {:send, messages})
   end
 
   def subscribe(conn, topic, subscription, sub_type, opts \\ []) do
@@ -416,7 +416,7 @@ defmodule PulsarEx.Connection do
             {from, Timex.now(), request}
           )
 
-        {:noreply, %{state | requests: requests}}
+        {:reply, :ok, %{state | requests: requests}}
 
       {:error, _} = err ->
         {:disconnect, err, err, state}
@@ -447,7 +447,7 @@ defmodule PulsarEx.Connection do
             {from, Timex.now(), request}
           )
 
-        {:noreply, %{state | requests: requests}}
+        {:reply, :ok, %{state | requests: requests}}
 
       {:error, _} = err ->
         {:disconnect, err, err, state}
@@ -621,10 +621,11 @@ defmodule PulsarEx.Connection do
 
     {request, state} =
       case {producer_id, consumer_id} do
-        {producer_id, nil} ->
+        {{producer_id, _}, nil} ->
           Logger.debug("Detected producer #{producer_id} down on broker #{state.broker_name}")
 
-          producers = Map.delete(state.producers, pid)
+          {{_, ref}, producers} = Map.pop(state.producers, pid)
+          Process.demonitor(ref)
 
           request =
             CommandCloseProducer.new(
@@ -634,10 +635,11 @@ defmodule PulsarEx.Connection do
 
           {request, %{state | producers: producers, request_id: state.request_id + 1}}
 
-        {nil, consumer_id} ->
+        {nil, {consumer_id, _}} ->
           Logger.debug("Detected consumer #{consumer_id} down on broker #{state.broker_name}")
 
-          consumers = Map.delete(state.consumers, pid)
+          {{_, ref}, consumers} = Map.delete(state.consumers, pid)
+          Process.demonitor(ref)
 
           request =
             CommandCloseConsumer.new(
@@ -683,9 +685,9 @@ defmodule PulsarEx.Connection do
       "Created producer #{request.producer_id} on broker #{state.broker_name} after #{latency}ms"
     )
 
-    Process.monitor(pid)
+    ref = Process.monitor(pid)
 
-    producers = Map.put(state.producers, pid, request.producer_id)
+    producers = Map.put(state.producers, pid, {request.producer_id, ref})
     requests = Map.delete(state.requests, {:request_id, response.request_id})
 
     reply = %{
@@ -729,9 +731,9 @@ defmodule PulsarEx.Connection do
           }, after #{latency}ms"
         )
 
-        Process.monitor(pid)
+        ref = Process.monitor(pid)
 
-        consumers = Map.put(state.consumers, pid, request.consumer_id)
+        consumers = Map.put(state.consumers, pid, {request.consumer_id, ref})
 
         reply = %{
           topic: request.topic,
@@ -813,17 +815,20 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%CommandCloseProducer{producer_id: producer_id}, _, state) do
-    case Enum.find(state.producers, &match?({_, ^producer_id}, &1)) do
-      {producer, producer_id} ->
+    case Enum.find(state.producers, &match?({_, {^producer_id, _}}, &1)) do
+      {producer, {producer_id, ref}} ->
         Logger.warn(
           "Received Close Producer command from broker #{state.broker_name} for producer #{
             producer_id
           }"
         )
 
+        Process.demonitor(ref)
+        producers = Map.delete(state.producers, producer)
+
         GenServer.cast(producer, :close)
 
-        state
+        %{state | producers: producers}
 
       nil ->
         Logger.error(
@@ -835,16 +840,20 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%CommandCloseConsumer{consumer_id: consumer_id}, _, state) do
-    case Enum.find(state.consumers, &match?({_, ^consumer_id}, &1)) do
-      {consumer, consumer_id} ->
+    case Enum.find(state.consumers, &match?({_, {^consumer_id, _}}, &1)) do
+      {consumer, {consumer_id, ref}} ->
         Logger.warn(
           "Received Close Consumer command from broker #{state.broker_name} for consumer #{
             consumer_id
           }"
         )
 
+        Process.demonitor(ref)
+        consumers = Map.delete(state.consumers, consumer)
+
         GenServer.cast(consumer, :close)
-        state
+
+        %{state | consumers: consumers}
 
       nil ->
         Logger.error(
@@ -856,7 +865,7 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%CommandSendReceipt{} = response, _, state) do
-    {{from, ts, _}, requests} =
+    {{{pid, _}, ts, _}, requests} =
       Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
 
     state = %{state | requests: requests}
@@ -869,15 +878,13 @@ defmodule PulsarEx.Connection do
       }ms"
     )
 
-    if from != nil do
-      GenServer.reply(from, {:ok, response.message_id})
-    end
+    GenServer.cast(pid, {:send_receipt, response.sequence_id, {:ok, response.message_id}})
 
     state
   end
 
   defp handle_command(%CommandSendError{error: err} = response, _, state) do
-    {{from, ts, _}, requests} =
+    {{{pid, _}, ts, _}, requests} =
       Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
 
     state = %{state | requests: requests}
@@ -890,9 +897,7 @@ defmodule PulsarEx.Connection do
       }, after #{latency}ms"
     )
 
-    if from != nil do
-      GenServer.reply(from, {:error, err})
-    end
+    GenServer.cast(pid, {:send_receipt, response.sequence_id, {:error, err}})
 
     state
   end
