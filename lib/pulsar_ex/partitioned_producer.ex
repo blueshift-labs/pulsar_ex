@@ -11,7 +11,6 @@ defmodule PulsarEx.PartitionedProducer do
       :batch_enabled,
       :batch_size,
       :flush_interval,
-      :refresh_interval,
       :send_timeout,
       :termination_timeout,
       :queue,
@@ -37,7 +36,6 @@ defmodule PulsarEx.PartitionedProducer do
       :batch_enabled,
       :batch_size,
       :flush_interval,
-      :refresh_interval,
       :send_timeout,
       :termination_timeout,
       :queue,
@@ -51,7 +49,6 @@ defmodule PulsarEx.PartitionedProducer do
 
   alias PulsarEx.{Topic, Admin, ConnectionManager, Connection, ProducerMessage}
 
-  @refresh_interval 60_000
   @batch_enabled false
   @batch_size 100
   @flush_interval 100
@@ -101,8 +98,6 @@ defmodule PulsarEx.PartitionedProducer do
       batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
       batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
       flush_interval: max(Keyword.get(producer_opts, :flush_interval, @flush_interval), 100),
-      refresh_interval:
-        max(Keyword.get(producer_opts, :refresh_interval, @refresh_interval), 10_000),
       send_timeout: min(Keyword.get(producer_opts, :send_timeout, @send_timeout), 10_000),
       termination_timeout:
         min(Keyword.get(producer_opts, :termination_timeout, @termination_timeout), 5_000),
@@ -137,12 +132,6 @@ defmodule PulsarEx.PartitionedProducer do
       } = reply
 
       Process.monitor(connection)
-
-      Process.send_after(
-        self(),
-        :refresh,
-        state.refresh_interval + :rand.uniform(state.refresh_interval)
-      )
 
       metadata =
         properties
@@ -193,44 +182,6 @@ defmodule PulsarEx.PartitionedProducer do
     Logger.error("Connection down for producer #{state.producer_id} with topic #{topic_name}")
 
     {:stop, {:error, :connection_down}, state}
-  end
-
-  @impl true
-  def handle_info(:refresh, %{broker: broker, topic_name: topic_name} = state) do
-    Logger.debug(
-      "Refreshing broker connection for producer #{state.producer_id} with topic #{topic_name}"
-    )
-
-    case Admin.lookup_topic(state.brokers, state.admin_port, state.topic) do
-      {:ok, ^broker} ->
-        Logger.debug(
-          "Unerlying broker unchanged for producer #{state.producer_id} with topic #{topic_name}"
-        )
-
-        Process.send_after(
-          self(),
-          :refresh,
-          state.refresh_interval + :rand.uniform(state.refresh_interval)
-        )
-
-        {:noreply, state}
-
-      {:error, err} ->
-        Logger.error(
-          "Error refreshing topic broker for producer #{state.producer_id} with topic #{
-            topic_name
-          }, #{inspect(err)}"
-        )
-
-        {:stop, {:error, err}, state}
-
-      _ ->
-        Logger.warn(
-          "Unerlying broker changed for producer #{state.producer_id} with topic #{topic_name}"
-        )
-
-        {:stop, {:error, :broker_changed}, state}
-    end
   end
 
   @impl true

@@ -16,7 +16,6 @@ defmodule PulsarEx.Consumer do
       :redelivery_policy,
       :dead_letter_topic,
       :poll_interval,
-      :refresh_interval,
       :ack_interval,
       :ack_timeout,
       :redelivery_interval,
@@ -60,7 +59,6 @@ defmodule PulsarEx.Consumer do
       :redelivery_policy,
       :dead_letter_topic,
       :poll_interval,
-      :refresh_interval,
       :ack_interval,
       :ack_timeout,
       :redelivery_interval,
@@ -125,7 +123,6 @@ defmodule PulsarEx.Consumer do
       @redelivery_policy Keyword.get(opts, :redelivery_policy, :exp)
       @dead_letter_topic Keyword.get(opts, :dead_letter_topic, nil)
       @poll_interval Keyword.get(opts, :poll_interval, 50)
-      @refresh_interval Keyword.get(opts, :refresh_interval, 60_000)
       @ack_interval Keyword.get(opts, :ack_interval, 5_000)
       @ack_timeout Keyword.get(opts, :ack_timeout, 5_000)
       @redelivery_interval Keyword.get(opts, :redelivery_interval, 1_000)
@@ -186,9 +183,6 @@ defmodule PulsarEx.Consumer do
         dead_letter_topic = Keyword.get(consumer_opts, :dead_letter_topic, @dead_letter_topic)
         poll_interval = max(Keyword.get(consumer_opts, :poll_interval, @poll_interval), 10)
 
-        refresh_interval =
-          max(Keyword.get(consumer_opts, :refresh_interval, @refresh_interval), 5_000)
-
         ack_interval = max(Keyword.get(consumer_opts, :ack_interval, @ack_interval), 1_000)
 
         ack_timeout = min(Keyword.get(consumer_opts, :ack_timeout, @ack_timeout), 10_000)
@@ -227,7 +221,6 @@ defmodule PulsarEx.Consumer do
           redelivery_policy: redelivery_policy,
           dead_letter_topic: dead_letter_topic,
           poll_interval: poll_interval,
-          refresh_interval: refresh_interval,
           ack_interval: ack_interval,
           ack_timeout: ack_timeout,
           redelivery_interval: redelivery_interval,
@@ -307,12 +300,6 @@ defmodule PulsarEx.Consumer do
             Process.send(self(), :poll, [])
           end
 
-          Process.send_after(
-            self(),
-            :refresh,
-            state.refresh_interval + :rand.uniform(state.refresh_interval)
-          )
-
           Process.send_after(self(), :acks, state.ack_interval)
           Process.send_after(self(), :nacks, state.redelivery_interval)
           Process.send_after(self(), :dead_letters, state.dead_letter_interval)
@@ -335,36 +322,6 @@ defmodule PulsarEx.Consumer do
         Logger.error("Connection down for consumer with topic #{state.topic_name}")
 
         {:stop, {:error, :connection_down}, state}
-      end
-
-      @impl true
-      def handle_info(:refresh, %{broker: broker} = state) do
-        case Admin.lookup_topic(state.brokers, state.admin_port, state.topic) do
-          {:ok, ^broker} ->
-            Logger.debug("No changes detected for consumer with topic #{state.topic_name}")
-
-            Process.send_after(
-              self(),
-              :refresh,
-              state.refresh_interval + :rand.uniform(state.refresh_interval)
-            )
-
-            {:noreply, state}
-
-          {:ok, _} ->
-            Logger.warn("Broker changed for topic #{state.topic_name}, closing consumer")
-
-            {:stop, {:error, :broker_changed}, state}
-
-          {:error, err} ->
-            Logger.error(
-              "Error refreshing broker from consumer for topic #{state.topic_name}, #{
-                inspect(err)
-              }"
-            )
-
-            {:stop, {:error, err}, state}
-        end
       end
 
       @impl true
