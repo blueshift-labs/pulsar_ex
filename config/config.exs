@@ -8,7 +8,7 @@ config :pulsar_ex,
   brokers: ["localhost"],
   admin_port: 8080,
   socket_opts: [],
-  timeout: 5_000,
+  connection_timeout: 5_000,
   shutdown_timeout: 1000,
   num_connections: 5
 

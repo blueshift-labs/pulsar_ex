@@ -17,7 +17,6 @@ defmodule PulsarEx.Consumer do
       :dead_letter_topic,
       :poll_interval,
       :ack_interval,
-      :ack_timeout,
       :redelivery_interval,
       :dead_letter_interval,
       :dead_letter_attempts,
@@ -60,7 +59,6 @@ defmodule PulsarEx.Consumer do
       :dead_letter_topic,
       :poll_interval,
       :ack_interval,
-      :ack_timeout,
       :redelivery_interval,
       :dead_letter_interval,
       :dead_letter_attempts,
@@ -124,7 +122,6 @@ defmodule PulsarEx.Consumer do
       @dead_letter_topic Keyword.get(opts, :dead_letter_topic, nil)
       @poll_interval Keyword.get(opts, :poll_interval, 50)
       @ack_interval Keyword.get(opts, :ack_interval, 5_000)
-      @ack_timeout Keyword.get(opts, :ack_timeout, 5_000)
       @redelivery_interval Keyword.get(opts, :redelivery_interval, 1_000)
       @dead_letter_interval Keyword.get(opts, :dead_letter_interval, 5_000)
       @max_dead_letter_attempts Keyword.get(opts, :max_dead_letter_attempts, 5)
@@ -185,8 +182,6 @@ defmodule PulsarEx.Consumer do
 
         ack_interval = max(Keyword.get(consumer_opts, :ack_interval, @ack_interval), 1_000)
 
-        ack_timeout = min(Keyword.get(consumer_opts, :ack_timeout, @ack_timeout), 10_000)
-
         redelivery_interval =
           max(Keyword.get(consumer_opts, :redelivery_interval, @redelivery_interval), 1_000)
 
@@ -222,7 +217,6 @@ defmodule PulsarEx.Consumer do
           dead_letter_topic: dead_letter_topic,
           poll_interval: poll_interval,
           ack_interval: ack_interval,
-          ack_timeout: ack_timeout,
           redelivery_interval: redelivery_interval,
           dead_letter_interval: dead_letter_interval,
           dead_letter_attempts: 0,
@@ -336,8 +330,7 @@ defmodule PulsarEx.Consumer do
                state.connection,
                state.consumer_id,
                :individual,
-               acks,
-               state.ack_timeout
+               acks
              ) do
           {:ok, request_id} ->
             Logger.debug(
@@ -821,6 +814,21 @@ defmodule PulsarEx.Consumer do
               state.consumer_id
             } for topic #{state.topic_name}"
           )
+
+          # best effort
+          if state.dead_letter_topic != nil do
+            Enum.each(state.dead_letters, fn message ->
+              message_opts =
+                Map.take(message, [:properties, :partition_key, :ordering_key, :event_time])
+
+              PulsarEx.async_produce(
+                state.dead_letter_topic,
+                message.payload,
+                message_opts,
+                state.dead_letter_producer_opts
+              )
+            end)
+          end
         end
 
         if length(state.nacks) > 0 do

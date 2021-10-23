@@ -54,17 +54,13 @@ defmodule PulsarEx.Connection do
     CommandAck,
     CommandRedeliverUnacknowledgedMessages,
     CommandAckResponse,
-    CommandPartitionedTopicMetadataResponse,
-    CommandPartitionedTopicMetadata,
-    CommandLookupTopicResponse,
-    CommandLookupTopic,
     CommandMessage
   }
 
   @client_version "Pulsar Ex #{Mix.Project.config()[:version]}"
   @protocol_version 13
 
-  @timeout 5000
+  @connection_timeout 5000
   @ping_interval 45_000
 
   def create_producer(conn, topic, opts \\ []) do
@@ -91,16 +87,8 @@ defmodule PulsarEx.Connection do
     GenServer.call(conn, {:redeliver, consumer_id, msg_ids})
   end
 
-  def ack(conn, consumer_id, ack_type, msg_ids, timeout) do
-    GenServer.call(conn, {:ack, consumer_id, ack_type, msg_ids}, timeout)
-  end
-
-  def lookup_partitions(conn, topic) do
-    GenServer.call(conn, {:lookup_partitions, topic})
-  end
-
-  def lookup_topic(conn, topic) do
-    GenServer.call(conn, {:lookup_topic, topic})
+  def ack(conn, consumer_id, ack_type, msg_ids) do
+    GenServer.call(conn, {:ack, consumer_id, ack_type, msg_ids})
   end
 
   def start_link(%Broker{} = broker) do
@@ -174,8 +162,8 @@ defmodule PulsarEx.Connection do
 
   defp do_connect(host, port) do
     socket_opts = Application.get_env(:pulsar_ex, :socket_opts, []) |> optimize_socket_opts()
-    timeout = Application.get_env(:pulsar_ex, :timeout, @timeout)
-    :gen_tcp.connect(to_charlist(host), port, socket_opts, timeout)
+    connection_timeout = Application.get_env(:pulsar_ex, :connection_timeout, @connection_timeout)
+    :gen_tcp.connect(to_charlist(host), port, socket_opts, connection_timeout)
   end
 
   defp do_handshake(socket) do
@@ -448,54 +436,6 @@ defmodule PulsarEx.Connection do
           )
 
         {:reply, :ok, %{state | requests: requests}}
-
-      {:error, _} = err ->
-        {:disconnect, err, err, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:lookup_partitions, topic}, from, state) do
-    Logger.debug("Looking up topic partitions on broker #{state.broker_name} for topic #{topic}")
-
-    request =
-      CommandPartitionedTopicMetadata.new(
-        topic: topic,
-        request_id: state.request_id
-      )
-
-    state = %{state | request_id: request.request_id + 1}
-
-    case :gen_tcp.send(state.socket, encode_command(request)) do
-      :ok ->
-        requests =
-          Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
-
-        {:noreply, %{state | requests: requests}}
-
-      {:error, _} = err ->
-        {:disconnect, err, err, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:lookup_topic, topic}, from, state) do
-    Logger.debug("Looking up topic on broker #{state.broker_name} for topic #{topic}")
-
-    request =
-      CommandLookupTopic.new(
-        topic: topic,
-        request_id: state.request_id
-      )
-
-    state = %{state | request_id: request.request_id + 1}
-
-    case :gen_tcp.send(state.socket, encode_command(request)) do
-      :ok ->
-        requests =
-          Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
-
-        {:noreply, %{state | requests: requests}}
 
       {:error, _} = err ->
         {:disconnect, err, err, state}
@@ -932,94 +872,6 @@ defmodule PulsarEx.Connection do
     )
 
     GenServer.cast(pid, {:ack_response, {:error, err, request_id}})
-
-    state
-  end
-
-  defp handle_command(
-         %CommandPartitionedTopicMetadataResponse{request_id: request_id, error: nil} = response,
-         _,
-         state
-       ) do
-    {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
-    state = %{state | requests: requests}
-
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
-
-    Logger.debug(
-      "Received Partition Metadata from broker #{state.broker_name} for topic #{request.topic}, after #{
-        latency
-      }ms"
-    )
-
-    if from != nil do
-      GenServer.reply(from, {:ok, response.partitions})
-    end
-
-    state
-  end
-
-  defp handle_command(
-         %CommandPartitionedTopicMetadataResponse{request_id: request_id, error: err},
-         _,
-         state
-       ) do
-    {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
-    state = %{state | requests: requests}
-
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
-
-    Logger.error(
-      "Received Partition Metadata Error from broker #{state.broker_name} for topic #{
-        request.topic
-      }, #{inspect(err)}, #{latency}ms"
-    )
-
-    if from != nil do
-      GenServer.reply(from, {:error, err})
-    end
-
-    state
-  end
-
-  defp handle_command(
-         %CommandLookupTopicResponse{request_id: request_id, error: nil} = response,
-         _,
-         state
-       ) do
-    {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
-    state = %{state | requests: requests}
-
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
-
-    Logger.debug(
-      "Received Topic Metadata from broker #{state.broker_name} for topic #{request.topic}, after #{
-        latency
-      }ms"
-    )
-
-    if from != nil do
-      GenServer.reply(from, {:ok, response})
-    end
-
-    state
-  end
-
-  defp handle_command(%CommandLookupTopicResponse{request_id: request_id, error: err}, _, state) do
-    {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
-    state = %{state | requests: requests}
-
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
-
-    Logger.error(
-      "Received Topic Metadata Error from broker #{state.broker_name} for topic #{request.topic}, #{
-        inspect(err)
-      }, after #{latency}ms"
-    )
-
-    if from != nil do
-      GenServer.reply(from, {:error, err})
-    end
 
     state
   end
