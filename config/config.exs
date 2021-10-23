@@ -23,7 +23,7 @@ config :pulsar_ex,
     num_producers: 1
   ],
   consumer_opts: [
-    auto_start: false,
+    auto_start: true,
     properties: [client: "pulsar_ex"]
   ],
   producers: [
