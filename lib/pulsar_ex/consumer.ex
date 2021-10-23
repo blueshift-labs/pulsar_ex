@@ -32,7 +32,8 @@ defmodule PulsarEx.Consumer do
       :nacks,
       :dead_letters,
       :passive_mode,
-      :consumer_opts
+      :consumer_opts,
+      :metadata
     ]
     defstruct [
       :state,
@@ -74,7 +75,8 @@ defmodule PulsarEx.Consumer do
       :nacks,
       :dead_letters,
       :passive_mode,
-      :consumer_opts
+      :consumer_opts,
+      :metadata
     ]
   end
 
@@ -145,6 +147,15 @@ defmodule PulsarEx.Consumer do
         Logger.debug(
           "Starting consumer for topic #{topic_name} with subscription #{subscription}"
         )
+
+        topic_logical_name = Topic.to_logical_name(topic)
+
+        metadata =
+          if topic.partition == nil do
+            %{topic: topic_logical_name, subscription: subscription}
+          else
+            %{topic: topic_logical_name, partition: topic.partition, subscription: subscription}
+          end
 
         brokers = Application.fetch_env!(:pulsar_ex, :brokers)
         admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
@@ -232,7 +243,8 @@ defmodule PulsarEx.Consumer do
           nacks: [],
           dead_letters: [],
           passive_mode: passive_mode,
-          consumer_opts: consumer_opts
+          consumer_opts: consumer_opts,
+          metadata: metadata
         }
 
         Process.send(self(), :init, [])
@@ -277,6 +289,11 @@ defmodule PulsarEx.Consumer do
 
           Process.monitor(connection)
 
+          metadata =
+            properties
+            |> Enum.into(%{}, fn {k, v} -> {String.to_atom(k), v} end)
+            |> Map.merge(state.metadata)
+
           state = %{
             state
             | state: :ready,
@@ -287,7 +304,8 @@ defmodule PulsarEx.Consumer do
               consumer_id: consumer_id,
               consumer_name: consumer_name,
               properties: properties,
-              connection: connection
+              connection: connection,
+              metadata: metadata
           }
 
           unless state.passive_mode do
@@ -304,9 +322,21 @@ defmodule PulsarEx.Consumer do
             }"
           )
 
+          :telemetry.execute(
+            [:pulsar_ex, :consumer, :connect, :success],
+            %{count: 1},
+            state.metadata
+          )
+
           {:noreply, state}
         else
           err ->
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :connect, :error],
+              %{count: 1},
+              state.metadata
+            )
+
             {:stop, err, state}
         end
       end
@@ -339,6 +369,12 @@ defmodule PulsarEx.Consumer do
               }"
             )
 
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flush_acks, :success],
+              %{count: 1, acks: length(acks)},
+              state.metadata
+            )
+
             Process.send_after(self(), :acks, state.ack_interval)
 
             {:noreply,
@@ -349,6 +385,12 @@ defmodule PulsarEx.Consumer do
               "Error sending #{length(acks)} acks from consumer #{state.consumer_id} for topic #{
                 state.topic_name
               }, #{inspect(err)}"
+            )
+
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flush_acks, :error],
+              %{count: 1, acks: length(acks)},
+              state.metadata
             )
 
             {:stop, {:error, err}, state}
@@ -377,6 +419,12 @@ defmodule PulsarEx.Consumer do
                 }"
               )
 
+              :telemetry.execute(
+                [:pulsar_ex, :consumer, :flush_nacks, :success],
+                %{count: 1, nacks: length(message_ids)},
+                state.metadata
+              )
+
               Process.send_after(self(), :nacks, state.redelivery_interval)
               {:noreply, %{state | nacks: nacks}}
 
@@ -385,6 +433,12 @@ defmodule PulsarEx.Consumer do
                 "Error sending #{length(message_ids)} nacks from consumer #{state.consumer_id} for topc #{
                   state.topic_name
                 }, #{inspect(err)}"
+              )
+
+              :telemetry.execute(
+                [:pulsar_ex, :consumer, :flush_nacks, :error],
+                %{count: 1, nacks: length(message_ids)},
+                state.metadata
               )
 
               {:stop, {:error, err}, state}
@@ -420,7 +474,7 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:dead_letters, %{dead_letters: dead_letters} = state) do
-        {err, dead_letters} =
+        {err, remain} =
           dead_letters
           |> Enum.reduce({nil, []}, fn message, {err, remain} ->
             message_opts =
@@ -446,22 +500,34 @@ defmodule PulsarEx.Consumer do
               } for topic #{state.topic_name}"
             )
 
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flush_dead_letters, :success],
+              %{count: 1, dead_letters: length(dead_letters)},
+              state.metadata
+            )
+
             Process.send_after(self(), :dead_letters, state.dead_letter_interval)
 
             {:noreply, %{state | dead_letters: [], dead_letter_attempts: 0}}
 
           _ ->
             Logger.error(
-              "Error senting #{length(dead_letters)} dead letters to topic #{
-                state.dead_letter_topic
-              }, from consumer #{state.consumer_id} for topic #{state.topic_name} with #{
-                state.dead_letter_attempts
-              } attempts, #{inspect(err)}"
+              "Error senting #{length(remain)} dead letters to topic #{state.dead_letter_topic}, from consumer #{
+                state.consumer_id
+              } for topic #{state.topic_name} with #{state.dead_letter_attempts} attempts, #{
+                inspect(err)
+              }"
+            )
+
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flush_dead_letters, :error],
+              %{count: 1, dead_letters: length(remain)},
+              state.metadata
             )
 
             state = %{
               state
-              | dead_letters: dead_letters,
+              | dead_letters: remain,
                 dead_letter_attempts: state.dead_letter_attempts + 1
             }
 
@@ -545,6 +611,18 @@ defmodule PulsarEx.Consumer do
               {acks, [nack | nacks]}
           end)
 
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :acks],
+          %{count: length(acks)},
+          state.metadata
+        )
+
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :nacks],
+          %{count: length(nacks)},
+          state.metadata
+        )
+
         state = %{
           state
           | acks: state.acks ++ acks,
@@ -589,6 +667,12 @@ defmodule PulsarEx.Consumer do
               }"
             )
 
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flow_permits, :success],
+              %{count: 1, permits: permits},
+              state.metadata
+            )
+
             if state.queue_size > 0 do
               Process.send(self(), :poll, [])
             else
@@ -602,6 +686,12 @@ defmodule PulsarEx.Consumer do
               "Error sending #{permits} permits from consumer #{state.consumer_id} for topic #{
                 state.topic_name
               }, #{inspect(err)}"
+            )
+
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flow_permits, :error],
+              %{count: 1, permits: permits},
+              state.metadata
             )
 
             {:stop, {:error, err}, state}
@@ -640,6 +730,12 @@ defmodule PulsarEx.Consumer do
           }"
         )
 
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :received],
+          %{count: length(messages)},
+          state.metadata
+        )
+
         {compacted, messages} =
           Enum.split_with(messages, &(&1.compacted_out && !state.read_compacted))
 
@@ -647,6 +743,12 @@ defmodule PulsarEx.Consumer do
           "Received #{length(compacted)} compacted messages for consumer #{state.consumer_id} from topic #{
             state.topic_name
           }"
+        )
+
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :received, :compacted],
+          %{count: length(compacted)},
+          state.metadata
         )
 
         acks = Enum.map(compacted, & &1.message_id)
@@ -659,6 +761,12 @@ defmodule PulsarEx.Consumer do
           }"
         )
 
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :received, :batch_acked],
+          %{count: length(batch_acked)},
+          state.metadata
+        )
+
         {dead_letters, messages} =
           Enum.split_with(messages, fn message ->
             message.redelivery_count > state.max_redelivery_attempts
@@ -668,6 +776,12 @@ defmodule PulsarEx.Consumer do
           "Received #{length(dead_letters)} dead letter messages for consumer #{state.consumer_id} from topic #{
             state.topic_name
           }"
+        )
+
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :received, :dead_letters],
+          %{count: length(dead_letters)},
+          state.metadata
         )
 
         acks = acks ++ Enum.map(dead_letters, & &1.message_id)
@@ -705,11 +819,23 @@ defmodule PulsarEx.Consumer do
       def handle_cast({:ack, messages}, state) do
         acks = messages |> Enum.map(& &1.message_id)
 
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :acks],
+          %{count: length(messages)},
+          state.metadata
+        )
+
         {:noreply, %{state | acks: state.acks ++ acks, permits: state.permits + length(acks)}}
       end
 
       @impl true
       def handle_cast({:nack, messages}, state) do
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :nacks],
+          %{count: length(messages)},
+          state.metadata
+        )
+
         nacks =
           messages
           |> Enum.map(fn message ->
@@ -741,6 +867,12 @@ defmodule PulsarEx.Consumer do
         {acks, pending_acks} = Map.pop(state.pending_acks, request_id, [])
         Logger.debug("Received successful ack response for #{length(acks)} acks")
 
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :ack_response, :success],
+          %{count: 1, acks: length(acks)},
+          state.metadata
+        )
+
         {:noreply, %{state | pending_acks: pending_acks}}
       end
 
@@ -748,6 +880,12 @@ defmodule PulsarEx.Consumer do
       def handle_cast({:ack_response, {:error, err, request_id}}, state) do
         {acks, pending_acks} = Map.pop(state.pending_acks, request_id, [])
         Logger.error("Received failed ack response for #{length(acks)} acks, #{inspect(err)}")
+
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :ack_response, :error],
+          %{count: 1, acks: length(acks)},
+          state.metadata
+        )
 
         {:noreply, %{state | pending_acks: pending_acks, acks: state.acks ++ acks}}
       end
@@ -778,6 +916,12 @@ defmodule PulsarEx.Consumer do
               }"
             )
 
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flow_permits, :success],
+              %{count: 1, permits: permits},
+              state.metadata
+            )
+
             {:ok, %{state | permits: 0}}
 
           {:error, err} ->
@@ -785,6 +929,12 @@ defmodule PulsarEx.Consumer do
               "Error sending #{permits} permits from consumer #{state.consumer_id} for topic #{
                 state.topic_name
               }, #{inspect(err)}"
+            )
+
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flow_permits, :error],
+              %{count: 1, permits: permits},
+              state.metadata
             )
 
             {:error, err, state}
@@ -828,6 +978,12 @@ defmodule PulsarEx.Consumer do
                 state.dead_letter_producer_opts
               )
             end)
+
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :flush_dead_letters, :best_effort],
+              %{count: 1, dead_letters: length(state.dead_letters)},
+              state.metadata
+            )
           end
         end
 
@@ -873,6 +1029,12 @@ defmodule PulsarEx.Consumer do
               }"
             )
 
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :close],
+              %{count: 1},
+              state.metadata
+            )
+
             # avoid immediate recreate on broker
             Process.sleep(state.termination_timeout)
             state
@@ -891,6 +1053,12 @@ defmodule PulsarEx.Consumer do
               "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
                 inspect(reason)
               }"
+            )
+
+            :telemetry.execute(
+              [:pulsar_ex, :consumer, :exit],
+              %{count: 1},
+              state.metadata
             )
 
             # avoid immediate recreate on broker
