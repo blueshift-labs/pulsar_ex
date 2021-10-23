@@ -578,7 +578,7 @@ defmodule PulsarEx.Connection do
         {nil, {consumer_id, _}} ->
           Logger.debug("Detected consumer #{consumer_id} down on broker #{state.broker_name}")
 
-          {{_, ref}, consumers} = Map.delete(state.consumers, pid)
+          {{_, ref}, consumers} = Map.pop(state.consumers, pid)
           Process.demonitor(ref)
 
           request =
@@ -684,7 +684,7 @@ defmodule PulsarEx.Connection do
           initial_position: request.initialPosition,
           consumer_id: request.consumer_id,
           consumer_name: request.consumer_name,
-          properties: request.metadata,
+          properties: from_kv(request.metadata),
           connection: self()
         }
 

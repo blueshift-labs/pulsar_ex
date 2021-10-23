@@ -101,31 +101,73 @@ defmodule PulsarEx.Worker do
       defoverridable handle_job: 2
 
       def enqueue_job(job, params, message_opts \\ []) when job in @jobs do
+        start = System.monotonic_time()
+
         properties =
           Keyword.get(message_opts, :properties, [])
           |> Enum.into(%{})
           |> Map.put("job", job)
 
-        PulsarEx.sync_produce(
-          @topic,
-          Jason.encode!(params),
-          Keyword.put(message_opts, :properties, properties),
-          @producer_opts
-        )
+        reply =
+          PulsarEx.sync_produce(
+            @topic,
+            Jason.encode!(params),
+            Keyword.put(message_opts, :properties, properties),
+            @producer_opts
+          )
+
+        case reply do
+          {:ok, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :worker, :enqueue, :success],
+              %{count: 1, duration: System.monotonic_time() - start},
+              %{topic: @topic, job: job}
+            )
+
+          {:error, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :worker, :enqueue, :error],
+              %{count: 1, duration: System.monotonic_time() - start},
+              %{topic: @topic, job: job}
+            )
+        end
+
+        reply
       end
 
       def enqueue_job_async(job, params, message_opts \\ []) when job in @jobs do
+        start = System.monotonic_time()
+
         properties =
           Keyword.get(message_opts, :properties, [])
           |> Enum.into(%{})
           |> Map.put("job", job)
 
-        PulsarEx.async_produce(
-          @topic,
-          Jason.encode!(params),
-          Keyword.put(message_opts, :properties, properties),
-          @producer_opts
-        )
+        reply =
+          PulsarEx.async_produce(
+            @topic,
+            Jason.encode!(params),
+            Keyword.put(message_opts, :properties, properties),
+            @producer_opts
+          )
+
+        case reply do
+          {:ok, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :worker, :enqueue_async, :success],
+              %{count: 1, duration: System.monotonic_time() - start},
+              %{topic: @topic, job: job}
+            )
+
+          {:error, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :worker, :enqueue_async, :error],
+              %{count: 1, duration: System.monotonic_time() - start},
+              %{topic: @topic, job: job}
+            )
+        end
+
+        reply
       end
     end
   end

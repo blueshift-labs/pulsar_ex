@@ -251,10 +251,22 @@ defmodule PulsarEx.PartitionedProducer do
 
     case reply do
       :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :success],
+          %{count: 1},
+          state.metadata
+        )
+
         pending_sends = Map.put(state.pending_sends, message.sequence_id, from)
         {:noreply, %{state | pending_sends: pending_sends}}
 
       {:error, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :error],
+          %{count: 1},
+          state.metadata
+        )
+
         {:reply, reply, state}
     end
   end
@@ -272,10 +284,22 @@ defmodule PulsarEx.PartitionedProducer do
 
     case reply do
       :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :success],
+          %{count: 1},
+          state.metadata
+        )
+
         pending_sends = Map.put(state.pending_sends, message.sequence_id, from)
         {:noreply, %{state | pending_sends: pending_sends}}
 
       {:error, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :success],
+          %{count: 1},
+          state.metadata
+        )
+
         {:reply, reply, state}
     end
   end
@@ -283,6 +307,12 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast({:produce, payload, _}, %{max_message_size: max_message_size} = state)
       when byte_size(payload) > max_message_size do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send, :error],
+      %{count: 1},
+      state.metadata
+    )
+
     {:noreply, state}
   end
 
@@ -304,10 +334,22 @@ defmodule PulsarEx.PartitionedProducer do
 
     case reply do
       :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :success],
+          %{count: 1},
+          state.metadata
+        )
+
         pending_sends = Map.put(state.pending_sends, message.sequence_id, nil)
         {:noreply, %{state | pending_sends: pending_sends}}
 
       {:error, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :error],
+          %{count: 1},
+          state.metadata
+        )
+
         {:noreply, state}
     end
   end
@@ -325,10 +367,22 @@ defmodule PulsarEx.PartitionedProducer do
 
     case reply do
       :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :success],
+          %{count: 1},
+          state.metadata
+        )
+
         pending_sends = Map.put(state.pending_sends, message.sequence_id, nil)
         {:noreply, %{state | pending_sends: pending_sends}}
 
       {:error, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :error],
+          %{count: 1},
+          state.metadata
+        )
+
         {:noreply, state}
     end
   end
@@ -342,6 +396,12 @@ defmodule PulsarEx.PartitionedProducer do
     )
 
     Process.send_after(self(), :connect, state.connect_interval)
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :close],
+      %{count: 1},
+      state.metadata
+    )
 
     {:noreply, %{state | state: :connecting}}
   end
@@ -410,6 +470,12 @@ defmodule PulsarEx.PartitionedProducer do
           "Stopping producer #{state.producer_id} with topic #{topic_name}, #{inspect(reason)}"
         )
 
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :exit],
+          %{count: 1},
+          state.metadata
+        )
+
         state
     end
   end
@@ -425,10 +491,22 @@ defmodule PulsarEx.PartitionedProducer do
 
         case reply do
           :ok ->
+            :telemetry.execute(
+              [:pulsar_ex, :producer, :send, :success],
+              %{count: 1},
+              state.metadata
+            )
+
             pending_sends = Map.put(state.pending_sends, message.sequence_id, from)
             flush_pending_queue(%{state | pending_queue: queue, pending_sends: pending_sends})
 
           {:error, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :producer, :send, :error],
+              %{count: 1},
+              state.metadata
+            )
+
             reply(from, reply)
             flush_pending_queue(%{state | pending_queue: queue})
         end
@@ -451,10 +529,22 @@ defmodule PulsarEx.PartitionedProducer do
 
         case reply do
           :ok ->
+            :telemetry.execute(
+              [:pulsar_ex, :producer, :send, :success],
+              %{count: 1},
+              state.metadata
+            )
+
             pending_sends = Map.put(state.pending_sends, message.sequence_id, from)
             flush_pending_queue(%{state | pending_queue: queue, pending_sends: pending_sends})
 
           {:error, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :producer, :send, :error],
+              %{count: 1},
+              state.metadata
+            )
+
             reply(from, reply)
             flush_pending_queue(%{state | pending_queue: queue})
         end
@@ -478,10 +568,22 @@ defmodule PulsarEx.PartitionedProducer do
 
         case reply do
           :ok ->
+            :telemetry.execute(
+              [:pulsar_ex, :producer, :send, :success],
+              %{count: length(messages)},
+              state.metadata
+            )
+
             pending_sends = Map.put(state.pending_sends, message.sequence_id, froms)
             %{state | pending_sends: pending_sends, batch_queue: :queue.new()}
 
           {:error, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :producer, :send, :error],
+              %{count: length(messages)},
+              state.metadata
+            )
+
             Task.async_stream(froms, &reply(&1, reply)) |> Enum.count()
             %{state | batch_queue: :queue.new()}
         end
