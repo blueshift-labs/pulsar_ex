@@ -91,6 +91,11 @@ defmodule PulsarEx do
     end
   end
 
+  defp produce(sync?, topic_name, payload, message_opts, producer_opts)
+       when is_map(message_opts) or is_map(producer_opts) do
+    produce(sync?, topic_name, payload, Enum.into(message_opts, []), Enum.into(producer_opts, []))
+  end
+
   defp produce(sync?, topic_name, payload, message_opts, producer_opts) do
     case ProducerSupervisor.lookup_partitions(topic_name) do
       [] ->

@@ -578,6 +578,17 @@ defmodule PulsarEx.Consumer do
               )
 
               Enum.map(batch, fn _ -> {:error, err} end)
+          catch
+            :exit, reason ->
+              Logger.error(Exception.format(:error, reason, __STACKTRACE__))
+
+              Logger.error(
+                "Error handling batch of #{length(batch)} messages from consumer #{
+                  state.consumer_id
+                } for topic #{state.topic_name}, #{inspect(reason)}"
+              )
+
+              Enum.map(batch, fn _ -> {:error, reason} end)
           end
 
         {acks, nacks} =
