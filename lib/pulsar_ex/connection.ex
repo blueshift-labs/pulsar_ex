@@ -235,7 +235,7 @@ defmodule PulsarEx.Connection do
         requests =
           Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
 
-        {:noreply, %{state | requests: requests}}
+        {:reply, :ok, %{state | requests: requests}}
 
       {:error, _} = err ->
         {:disconnect, err, err, state}
@@ -617,7 +617,7 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%CommandProducerSuccess{producer_ready: true} = response, _, state) do
-    {{pid, _} = from, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
+    {{pid, _}, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
 
     latency = Timex.diff(Timex.now(), ts, :milliseconds)
 
@@ -641,7 +641,7 @@ defmodule PulsarEx.Connection do
       connection: self()
     }
 
-    GenServer.reply(from, {:ok, reply})
+    GenServer.cast(pid, {:created, {:ok, reply}})
     %{state | requests: requests, producers: producers}
   end
 
@@ -729,6 +729,19 @@ defmodule PulsarEx.Connection do
     state = %{state | requests: requests}
 
     case request_info do
+      {{pid, _}, ts, %CommandProducer{} = request} ->
+        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+
+        Logger.error(
+          "Error connecting producer #{request.producer_id} to topic #{request.topic} on broker #{
+            state.broker_name
+          }, after #{latency}ms, #{inspect(err)}"
+        )
+
+        GenServer.cast(pid, {:created, {:error, err}})
+
+        state
+
       {{pid, _}, ts, %CommandSubscribe{} = request} ->
         latency = Timex.diff(Timex.now(), ts, :milliseconds)
 
