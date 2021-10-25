@@ -148,49 +148,10 @@ defmodule PulsarEx.PartitionedProducer do
 
     with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
          {:ok, pool} <- ConnectionManager.get_connection(broker),
-         {:ok, reply} <- create_producer(pool, Topic.to_name(state.topic), state.producer_opts) do
-      %{
-        producer_id: producer_id,
-        producer_name: producer_name,
-        producer_access_mode: producer_access_mode,
-        last_sequence_id: last_sequence_id,
-        max_message_size: max_message_size,
-        properties: properties,
-        connection: connection
-      } = reply
+         :ok <- create_producer(pool, Topic.to_name(state.topic), state.producer_opts) do
+      Logger.debug("Connecting producer #{state.producer_id} with topic #{state.topic_name}")
 
-      ref = Process.monitor(connection)
-
-      metadata =
-        properties
-        |> Enum.into(%{}, fn {k, v} -> {String.to_atom(k), v} end)
-        |> Map.merge(state.metadata)
-
-      state = %{
-        state
-        | state: :ready,
-          broker: broker,
-          producer_id: producer_id,
-          producer_name: producer_name,
-          producer_access_mode: producer_access_mode,
-          last_sequence_id: last_sequence_id,
-          max_message_size: max_message_size,
-          properties: properties,
-          connection: connection,
-          connection_ref: ref,
-          metadata: metadata,
-          connect_attempts: 0
-      }
-
-      Logger.debug("Connected producer #{state.producer_id} with topic #{state.topic_name}")
-
-      :telemetry.execute(
-        [:pulsar_ex, :producer, :connect, :success],
-        %{count: 1, attempts: state.connect_attempts + 1},
-        state.metadata
-      )
-
-      {:noreply, flush_pending_queue(state)}
+      {:noreply, %{state | broker: broker}}
     else
       err ->
         Logger.error("Error connecting producer with topic #{state.topic_name}, #{inspect(err)}")
@@ -302,6 +263,66 @@ defmodule PulsarEx.PartitionedProducer do
 
         {:reply, reply, state}
     end
+  end
+
+  @impl true
+  def handle_cast({:created, {:ok, reply}}, %{state: :connecting} = state) do
+    %{
+      producer_id: producer_id,
+      producer_name: producer_name,
+      producer_access_mode: producer_access_mode,
+      last_sequence_id: last_sequence_id,
+      max_message_size: max_message_size,
+      properties: properties,
+      connection: connection
+    } = reply
+
+    ref = Process.monitor(connection)
+
+    metadata =
+      properties
+      |> Enum.into(%{}, fn {k, v} -> {String.to_atom(k), v} end)
+      |> Map.merge(state.metadata)
+
+    state = %{
+      state
+      | state: :ready,
+        producer_id: producer_id,
+        producer_name: producer_name,
+        producer_access_mode: producer_access_mode,
+        last_sequence_id: last_sequence_id,
+        max_message_size: max_message_size,
+        properties: properties,
+        connection: connection,
+        connection_ref: ref,
+        metadata: metadata,
+        connect_attempts: 0
+    }
+
+    Logger.debug("Connected producer #{state.producer_id} with topic #{state.topic_name}")
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :connect, :success],
+      %{count: 1, attempts: state.connect_attempts + 1},
+      state.metadata
+    )
+
+    {:noreply, flush_pending_queue(state)}
+  end
+
+  @impl true
+  def handle_cast({:created, {:error, err}}, %{state: :connecting} = state) do
+    Logger.error("Error connecting producer with topic #{state.topic_name}, #{inspect(err)}")
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :connect, :error],
+      %{count: 1},
+      state.metadata
+    )
+
+    state = %{state | connect_attempts: state.connect_attempts + 1}
+    Process.send_after(self(), :connect, state.connect_interval * state.connect_attempts)
+    {:noreply, state}
   end
 
   @impl true

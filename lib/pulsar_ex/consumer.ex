@@ -520,7 +520,7 @@ defmodule PulsarEx.Consumer do
               state.dead_letter_producer_opts
             )
             |> case do
-              :ok -> {err, remain}
+              {:ok, _} -> {err, remain}
               {:error, error} -> {err || error, [message | remain]}
             end
           end)
