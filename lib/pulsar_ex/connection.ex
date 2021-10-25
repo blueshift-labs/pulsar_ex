@@ -304,7 +304,7 @@ defmodule PulsarEx.Connection do
         requests =
           Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
 
-        {:noreply, %{state | requests: requests}}
+        {:reply, :ok, %{state | requests: requests}}
 
       {:error, _} = err ->
         {:disconnect, err, err, state}
@@ -662,7 +662,7 @@ defmodule PulsarEx.Connection do
     state = %{state | requests: requests}
 
     case request_info do
-      {{pid, _} = from, ts, %CommandSubscribe{} = request} ->
+      {{pid, _}, ts, %CommandSubscribe{} = request} ->
         latency = Timex.diff(Timex.now(), ts, :milliseconds)
 
         Logger.debug(
@@ -688,7 +688,7 @@ defmodule PulsarEx.Connection do
           connection: self()
         }
 
-        GenServer.reply(from, {:ok, reply})
+        GenServer.cast(pid, {:subscribed, {:ok, reply}})
 
         %{state | consumers: consumers}
 
@@ -729,6 +729,19 @@ defmodule PulsarEx.Connection do
     state = %{state | requests: requests}
 
     case request_info do
+      {{pid, _}, ts, %CommandSubscribe{} = request} ->
+        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+
+        Logger.error(
+          "Error subscribing to topic #{request.topic} for consumer #{request.consumer_id} on broker #{
+            state.broker_name
+          }, after #{latency}ms, #{inspect(err)}"
+        )
+
+        GenServer.cast(pid, {:subscribed, {:error, err}})
+
+        state
+
       {nil, ts, request} ->
         latency = Timex.diff(Timex.now(), ts, :milliseconds)
 

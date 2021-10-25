@@ -212,7 +212,7 @@ defmodule PulsarEx.Consumer do
           min(Keyword.get(consumer_opts, :termination_timeout, @termination_timeout), 5_000)
 
         state = %State{
-          state: :init,
+          state: :connecting,
           topic: topic,
           topic_name: topic_name,
           subscription: subscription,
@@ -247,7 +247,7 @@ defmodule PulsarEx.Consumer do
           metadata: metadata
         }
 
-        Process.send(self(), :init, [])
+        Process.send(self(), :connect, [])
 
         {:ok, state}
       end
@@ -266,10 +266,82 @@ defmodule PulsarEx.Consumer do
       end
 
       @impl true
-      def handle_info(:init, %{state: :init} = state) do
+      def handle_cast({:subscribed, {:error, err}}, %{state: :connecting} = state) do
+        Logger.debug(
+          "Error subscribing consumer for topic #{state.topic_name} with subscription #{
+            state.subscription
+          }, #{inspect(err)}"
+        )
+
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :connect, :error],
+          %{count: 1},
+          state.metadata
+        )
+
+        {:stop, {:error, err}, state}
+      end
+
+      @impl true
+      def handle_cast({:subscribed, {:ok, reply}}, %{state: :connecting} = state) do
+        %{
+          priority_level: priority_level,
+          read_compacted: read_compacted,
+          initial_position: initial_position,
+          consumer_id: consumer_id,
+          consumer_name: consumer_name,
+          properties: properties,
+          connection: connection
+        } = reply
+
+        Process.monitor(connection)
+
+        metadata =
+          properties
+          |> Enum.into(%{}, fn {k, v} -> {String.to_atom(k), v} end)
+          |> Map.merge(state.metadata)
+
+        state = %{
+          state
+          | state: :ready,
+            priority_level: priority_level,
+            read_compacted: read_compacted,
+            initial_position: initial_position,
+            consumer_id: consumer_id,
+            consumer_name: consumer_name,
+            properties: properties,
+            connection: connection,
+            metadata: metadata
+        }
+
+        unless state.passive_mode do
+          Process.send(self(), :poll, [])
+        end
+
+        Process.send_after(self(), :acks, state.ack_interval)
+        Process.send_after(self(), :nacks, state.redelivery_interval)
+        Process.send_after(self(), :dead_letters, state.dead_letter_interval)
+
+        Logger.debug(
+          "Subscribed consumer for topic #{state.topic_name} with subscription #{
+            state.subscription
+          }"
+        )
+
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :connect, :success],
+          %{count: 1},
+          state.metadata
+        )
+
+        {:noreply, state}
+      end
+
+      @impl true
+      def handle_info(:connect, %{state: :connecting} = state) do
         with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
              {:ok, pool} <- ConnectionManager.get_connection(broker),
-             {:ok, reply} <-
+             :ok <-
                subscribe(
                  pool,
                  state.topic_name,
@@ -277,60 +349,21 @@ defmodule PulsarEx.Consumer do
                  state.subscription_type,
                  state.consumer_opts
                ) do
-          %{
-            priority_level: priority_level,
-            read_compacted: read_compacted,
-            initial_position: initial_position,
-            consumer_id: consumer_id,
-            consumer_name: consumer_name,
-            properties: properties,
-            connection: connection
-          } = reply
-
-          Process.monitor(connection)
-
-          metadata =
-            properties
-            |> Enum.into(%{}, fn {k, v} -> {String.to_atom(k), v} end)
-            |> Map.merge(state.metadata)
-
-          state = %{
-            state
-            | state: :ready,
-              broker: broker,
-              priority_level: priority_level,
-              read_compacted: read_compacted,
-              initial_position: initial_position,
-              consumer_id: consumer_id,
-              consumer_name: consumer_name,
-              properties: properties,
-              connection: connection,
-              metadata: metadata
-          }
-
-          unless state.passive_mode do
-            Process.send(self(), :poll, [])
-          end
-
-          Process.send_after(self(), :acks, state.ack_interval)
-          Process.send_after(self(), :nacks, state.redelivery_interval)
-          Process.send_after(self(), :dead_letters, state.dead_letter_interval)
-
           Logger.debug(
-            "Started consumer for topic #{state.topic_name} with subscription #{
+            "Subscribing consumer for topic #{state.topic_name} with subscription #{
               state.subscription
             }"
           )
 
-          :telemetry.execute(
-            [:pulsar_ex, :consumer, :connect, :success],
-            %{count: 1},
-            state.metadata
-          )
-
-          {:noreply, state}
+          {:noreply, %{state | broker: broker}}
         else
           err ->
+            Logger.debug(
+              "Error subscribing consumer for topic #{state.topic_name} with subscription #{
+                state.subscription
+              }, #{inspect(err)}"
+            )
+
             :telemetry.execute(
               [:pulsar_ex, :consumer, :connect, :error],
               %{count: 1},
