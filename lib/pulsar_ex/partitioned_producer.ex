@@ -191,6 +191,12 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_call({:produce, payload, _}, _from, %{max_message_size: max_message_size} = state)
       when byte_size(payload) > max_message_size do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send, :error],
+      %{count: 1},
+      state.metadata
+    )
+
     {:reply, {:error, :message_size_too_large}, state}
   end
 
@@ -256,7 +262,7 @@ defmodule PulsarEx.PartitionedProducer do
 
       {:error, _} ->
         :telemetry.execute(
-          [:pulsar_ex, :producer, :send, :success],
+          [:pulsar_ex, :producer, :send, :error],
           %{count: 1},
           state.metadata
         )
