@@ -37,17 +37,6 @@ defmodule PulsarEx.ConsumerMessage do
     :event_time,
     :ordering_key,
     :deliver_at_time,
-    :payload,
-    :consumer
+    :payload
   ]
-
-  alias PulsarEx.{ConsumerMessage, Consumer}
-
-  def ack(%ConsumerMessage{consumer: consumer} = message) when not is_nil(consumer) do
-    Consumer.ack(consumer, message)
-  end
-
-  def nack(%ConsumerMessage{consumer: consumer} = message) when not is_nil(consumer) do
-    Consumer.nack(consumer, message)
-  end
 end

@@ -3,18 +3,16 @@ defmodule PulsarEx.ConsumerManager do
 
   require Logger
 
-  alias PulsarEx.{Consumers, PartitionedConsumerSupervisor, DefaultPassiveConsumer}
+  alias PulsarEx.{Consumers, PartitionedConsumerSupervisor}
 
-  def create({topic_name, subscription, module, opts, timeout}) do
-    create(topic_name, subscription, module, opts, timeout)
-  end
+  @timeout 180_000
 
   def create({topic_name, subscription, module, opts}) do
-    create(topic_name, subscription, module, opts, 5_000)
+    create(topic_name, subscription, module, opts)
   end
 
-  def create(topic_name, subscription, module, opts, timeout \\ 5_000) do
-    GenServer.call(__MODULE__, {:create, topic_name, subscription, module, opts}, timeout)
+  def create(topic_name, subscription, module, opts) do
+    GenServer.call(__MODULE__, {:create, topic_name, subscription, module, opts}, @timeout)
   end
 
   def start_link({lookup, auto_start}) do
@@ -37,7 +35,7 @@ defmodule PulsarEx.ConsumerManager do
       |> Enum.reduce_while({nil, %{}}, fn opts, {nil, started} ->
         topic_name = Keyword.fetch!(opts, :topic)
         subscription = Keyword.fetch!(opts, :subscription)
-        module = Keyword.get(opts, :module, DefaultPassiveConsumer)
+        module = Keyword.fetch!(opts, :module)
         consumer_opts = consumer_opts(opts)
 
         case start_consumer(topic_name, subscription, module, consumer_opts, lookup) do

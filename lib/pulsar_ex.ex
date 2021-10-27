@@ -5,15 +5,9 @@ defmodule PulsarEx do
     ProducerManager,
     PartitionedProducer,
     Topic,
-    Partitioner,
-    ConsumerRegistry,
-    ConsumerManager,
-    ConsumerSupervisor,
-    Consumer,
-    ConsumerMessage
+    Partitioner
   }
 
-  @retry_delay 1000
   @max_attempts 5
 
   def sync_produce(topic_name, payload, message_opts \\ [], producer_opts \\ []) do
@@ -67,27 +61,48 @@ defmodule PulsarEx do
   # in the event of topic rebalancing, producer will take time to reconnect
   defp retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts \\ 1) do
     :telemetry.execute(
-      [:pulsar_ex, :retry_produce],
+      [:pulsar_ex, :produce],
       %{attempts: attempts},
       %{topic: topic_name}
     )
 
-    try do
-      produce(sync?, topic_name, payload, message_opts, producer_opts)
-    catch
-      :exit, reason ->
+    case produce(sync?, topic_name, payload, message_opts, producer_opts) do
+      :ok ->
+        :ok
+
+      {:ok, message_id} ->
+        {:ok, message_id}
+
+      {:error, :producer_not_ready} ->
         :telemetry.execute(
-          [:pulsar_ex, :retry_produce, :exit],
+          [:pulsar_ex, :produce, :producer_not_ready],
           %{count: 1},
           %{topic: topic_name}
         )
 
         if attempts >= @max_attempts do
-          {:error, reason}
+          {:error, :producer_not_ready}
         else
-          Process.sleep(@retry_delay)
+          Process.sleep(500)
           retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts + 1)
         end
+
+      {:error, :closed} ->
+        :telemetry.execute(
+          [:pulsar_ex, :produce, :closed],
+          %{count: 1},
+          %{topic: topic_name}
+        )
+
+        if attempts >= @max_attempts do
+          {:error, :closed}
+        else
+          Process.sleep(1000)
+          retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts + 1)
+        end
+
+      reply ->
+        reply
     end
   end
 
@@ -123,47 +138,7 @@ defmodule PulsarEx do
             producer = :poolboy.checkout(pool)
             :poolboy.checkin(pool, producer)
 
-            PartitionedProducer.produce(producer, payload, message_opts, sync?)
-        end
-    end
-  end
-
-  def ack(%ConsumerMessage{} = message) do
-    ConsumerMessage.ack(message)
-  end
-
-  def nack(%ConsumerMessage{} = message) do
-    ConsumerMessage.nack(message)
-  end
-
-  def poll(topic_name, subscription, module \\ nil, consumer_opts \\ [])
-
-  def poll(topic_name, subscription, module, consumer_opts) do
-    case ConsumerSupervisor.lookup_partitions(topic_name) do
-      [] ->
-        case ConsumerManager.create(topic_name, subscription, module, consumer_opts) do
-          :ok -> poll(topic_name, subscription, module, consumer_opts)
-          {:error, :already_started} -> poll(topic_name, subscription, module, consumer_opts)
-          {:error, _} = err -> err
-        end
-
-      [{_, {%Topic{} = topic, partitions}}] ->
-        topic =
-          case partitions do
-            0 -> topic
-            _ -> %{topic | partition: Enum.random(0..(partitions - 1))}
-          end
-
-        case Registry.lookup(ConsumerRegistry, {topic, subscription}) do
-          [] ->
-            {:error, :consumer_not_ready}
-
-          [{pool, _}] ->
-            # we are just using the pool to do round robin, consuming message doesn't have to block the pool
-            consumer = :poolboy.checkout(pool)
-            :poolboy.checkin(pool, consumer)
-
-            Consumer.poll(consumer)
+            PartitionedProducer.produce(sync?, producer, payload, message_opts)
         end
     end
   end
