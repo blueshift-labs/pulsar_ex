@@ -138,7 +138,16 @@ defmodule PulsarEx do
             producer = :poolboy.checkout(pool)
             :poolboy.checkin(pool, producer)
 
-            PartitionedProducer.produce(sync?, producer, payload, message_opts)
+            start = System.monotonic_time()
+            reply = PartitionedProducer.produce(sync?, producer, payload, message_opts)
+
+            :telemetry.execute(
+              [:pulsar_ex, :produce, :debug],
+              %{duration: System.monotonic_time() - start},
+              %{}
+            )
+
+            reply
         end
     end
   end

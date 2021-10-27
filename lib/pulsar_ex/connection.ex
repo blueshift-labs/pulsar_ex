@@ -72,11 +72,25 @@ defmodule PulsarEx.Connection do
   end
 
   def send_message(conn, %ProducerMessage{} = message) do
-    GenServer.call(conn, {:send, message}, @request_timeout)
+    start = System.monotonic_time()
+    reply = GenServer.call(conn, {:send, message}, @request_timeout)
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug],
+      %{duration: System.monotonic_time() - start},
+      %{}
+    )
+    reply
   end
 
   def send_messages(conn, messages) when is_list(messages) do
-    GenServer.call(conn, {:send, messages}, @request_timeout)
+    start = System.monotonic_time()
+    reply = GenServer.call(conn, {:send, messages}, @request_timeout)
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug],
+      %{duration: System.monotonic_time() - start},
+      %{}
+    )
+    reply
   end
 
   def subscribe(conn, topic, subscription, sub_type, opts \\ []) do

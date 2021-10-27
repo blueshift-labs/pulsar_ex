@@ -54,7 +54,17 @@ defmodule PulsarEx.PartitionedProducer do
   @termination_timeout 1000
 
   def produce(true, pid, payload, message_opts) do
-    GenServer.call(pid, {:produce, payload, message_opts}, @send_timeout)
+    start = System.monotonic_time()
+
+    reply = GenServer.call(pid, {:produce, payload, message_opts}, @send_timeout)
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :debug],
+      %{duration: System.monotonic_time() - start},
+      %{}
+    )
+
+    reply
   end
 
   def produce(false, pid, payload, message_opts) do
