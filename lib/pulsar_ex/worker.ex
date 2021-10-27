@@ -17,8 +17,9 @@ defmodule PulsarEx.Worker do
 
       opts =
         opts
-        |> Keyword.merge(batch_size: 1, passive_mode: false, initial_position: :earliest)
+        |> Keyword.merge(batch_size: 1, initial_position: :earliest)
         |> Keyword.put_new(:dead_letter_topic, topic)
+        |> Keyword.put_new(:receiving_queue_size, 10)
 
       use PulsarEx.Consumer, opts
       @behaviour PulsarEx.WorkerCallback
@@ -33,11 +34,9 @@ defmodule PulsarEx.Worker do
       @middlewares @default_middlewares ++ middlewares
       @producer_opts producer_opts
       @opts opts
-      @timeout 5_000
 
       def worker_spec(opts) do
         workers = Keyword.get(opts, :workers) || Keyword.get(@opts, :workers)
-        timeout = Keyword.get(opts, :timeout) || Keyword.get(@opts, :timeout) || @timeout
 
         opts =
           case workers do
@@ -49,8 +48,7 @@ defmodule PulsarEx.Worker do
           @topic,
           @subscription,
           __MODULE__,
-          Keyword.merge(@opts, opts),
-          timeout
+          Keyword.merge(@opts, opts)
         }
       end
 
