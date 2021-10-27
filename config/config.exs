@@ -40,9 +40,10 @@ config :pulsar_ex,
     [
       topic: "persistent://public/default/test.json",
       subscription: "test",
+      module: PulsarEx.TestWorker,
       properties: [test: false],
       refresh_interval: 15_000,
-      num_consumers: 3,
+      num_consumers: 30,
       module: PulsarEx.DefaultWorker
     ]
   ]
