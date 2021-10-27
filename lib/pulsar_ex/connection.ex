@@ -859,13 +859,26 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%{sequence_id: sequence_id} = response, payload, state) do
-    if Map.get(state.requests, {:sequence_id, response.producer_id, sequence_id}) == nil do
+    request_info = Map.get(state.requests, {:sequence_id, response.producer_id, sequence_id})
+
+    if request_info == nil do
       Logger.warn(
         "Received unexpected response #{inspect(response)} from broker #{state.broker_name}"
       )
 
       state
     else
+      {_, ts, _} = request_info
+
+      :telemetry.execute(
+        [:pulsar_ex, :connection, :response],
+        %{
+          latency:
+            DateTime.to_unix(Timex.now(), :millisecond) - DateTime.to_unix(ts, :millisecond)
+        },
+        Map.put(state.metadata, :type, response.__struct__)
+      )
+
       handle_response(response, payload, state)
     end
   end
