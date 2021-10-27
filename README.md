@@ -19,13 +19,19 @@ def deps do
 end
 ```
 
-stream = (1..201)|>Task.async_stream(fn x ->     
-  PulsarEx.DefaultWorker.enqueue_job_async(:test, %{message: "hello-#{x}"})
-end, max_concurrency: 100)
-
-Enum.to_list(stream)
-
-
-messages = PulsarEx.poll("persistent://public/default/2.json", "test", PulsarEx.DefaultPassiveConsumer)
 
 PulsarEx.sync_produce("persistent://public/default/10000.json", "test")
+
+defmodule TestWorker do
+  use PulsarEx.Worker,
+    otp_app: :pulsar_ex,
+    topic: "persistent://public/default/test.json",
+    subscription: "test",
+    jobs: [:backfill_account, :backfill_partition, :backfill_collection, :backfill_user]
+
+  def handle_job(job, params) do
+    IO.inspect(job)
+    IO.inspect(params)
+    :ok
+  end
+end
