@@ -73,24 +73,40 @@ defmodule PulsarEx.Connection do
 
   def send_message(conn, %ProducerMessage{} = message) do
     start = System.monotonic_time()
-    reply = GenServer.call(conn, {:send, message, start}, @request_timeout)
+    {a, b, ts} = GenServer.call(conn, {:send, message, start}, @request_timeout)
+
     :telemetry.execute(
-      [:pulsar_ex, :connection, :debug],
-      %{duration: System.monotonic_time() - start},
+      [:pulsar_ex, :connection, :debug, :reply],
+      %{latency: System.monotonic_time() - ts},
       %{}
     )
-    reply
+
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug],
+      %{latency: System.monotonic_time() - start},
+      %{}
+    )
+
+    {a, b}
   end
 
   def send_messages(conn, messages) when is_list(messages) do
     start = System.monotonic_time()
-    reply = GenServer.call(conn, {:send, messages, start}, @request_timeout)
+    {a, b, ts} = GenServer.call(conn, {:send, messages, start}, @request_timeout)
+
     :telemetry.execute(
-      [:pulsar_ex, :connection, :debug],
-      %{duration: System.monotonic_time() - start},
+      [:pulsar_ex, :connection, :debug, :reply],
+      %{latency: System.monotonic_time() - ts},
       %{}
     )
-    reply
+
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug],
+      %{latency: System.monotonic_time() - start},
+      %{}
+    )
+
+    {a, b}
   end
 
   def subscribe(conn, topic, subscription, sub_type, opts \\ []) do
@@ -154,7 +170,12 @@ defmodule PulsarEx.Connection do
       )
 
       {:ok,
-       %{state | socket: socket, last_server_ts: Timex.now(), max_message_size: max_message_size}}
+       %{
+         state
+         | socket: socket,
+           last_server_ts: System.monotonic_time(),
+           max_message_size: max_message_size
+       }}
     else
       {:error, _} = err ->
         :telemetry.execute(
@@ -280,7 +301,11 @@ defmodule PulsarEx.Connection do
         )
 
         requests =
-          Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {from, System.monotonic_time(), request}
+          )
 
         {:noreply, %{state | requests: requests}}
 
@@ -361,7 +386,11 @@ defmodule PulsarEx.Connection do
         )
 
         requests =
-          Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {from, System.monotonic_time(), request}
+          )
 
         {:noreply, %{state | requests: requests}}
 
@@ -458,7 +487,7 @@ defmodule PulsarEx.Connection do
               Map.put(
                 state.requests,
                 {:request_id, request.request_id},
-                {from, Timex.now(), request}
+                {from, System.monotonic_time(), request}
               )
 
             {:noreply, %{state | requests: requests}}
@@ -533,10 +562,13 @@ defmodule PulsarEx.Connection do
 
   @impl true
   def handle_call(
-        {:send, %ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} = message, req_ts},
+        {:send, %ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} = message,
+         req_ts},
         {pid, _} = from,
         state
       ) do
+    start = System.monotonic_time()
+
     :telemetry.execute(
       [:pulsar_ex, :connection, :debug],
       %{queue_time: System.monotonic_time() - req_ts},
@@ -563,8 +595,14 @@ defmodule PulsarEx.Connection do
               Map.put(
                 state.requests,
                 {:sequence_id, producer_id, sequence_id},
-                {from, Timex.now(), request}
+                {from, System.monotonic_time(), request}
               )
+
+            :telemetry.execute(
+              [:pulsar_ex, :connection, :debug, :tcp_send],
+              %{latency: System.monotonic_time() - start},
+              %{}
+            )
 
             {:noreply, %{state | requests: requests}}
 
@@ -592,16 +630,19 @@ defmodule PulsarEx.Connection do
   @impl true
   def handle_call(
         {:send,
-         [%ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} | _] = messages, req_ts},
+         [%ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} | _] = messages,
+         req_ts},
         {pid, _} = from,
         state
       ) do
+    start = System.monotonic_time()
+
     :telemetry.execute(
       [:pulsar_ex, :connection, :debug],
       %{queue_time: System.monotonic_time() - req_ts},
       %{}
     )
-    
+
     case Map.get(state.producers, pid) do
       {^producer_id, _} ->
         Logger.debug(
@@ -618,13 +659,19 @@ defmodule PulsarEx.Connection do
               Map.put(
                 state.requests,
                 {:sequence_id, producer_id, sequence_id},
-                {from, Timex.now(), request}
+                {from, System.monotonic_time(), request}
               )
 
             :telemetry.execute(
               [:pulsar_ex, :connection, :send, :success],
               %{count: 1},
               state.metadata
+            )
+
+            :telemetry.execute(
+              [:pulsar_ex, :connection, :debug, :tcp_send],
+              %{latency: System.monotonic_time() - start},
+              %{}
             )
 
             {:noreply, %{state | requests: requests}}
@@ -701,7 +748,7 @@ defmodule PulsarEx.Connection do
     end)
 
     :inet.setopts(socket, active: :once)
-    {:noreply, %{state | buffer: buffer, last_server_ts: Timex.now()}}
+    {:noreply, %{state | buffer: buffer, last_server_ts: System.monotonic_time()}}
   end
 
   @impl true
@@ -709,10 +756,7 @@ defmodule PulsarEx.Connection do
     Logger.debug("Sending ping command to broker #{state.broker_name}")
 
     cond do
-      Timex.after?(
-        Timex.now(),
-        Timex.add(state.last_server_ts, Timex.Duration.from_milliseconds(@ping_interval))
-      ) ->
+      System.monotonic_time() - state.last_server_ts > @ping_interval ->
         {:disconnect, {:error, :closed}, state}
 
       true ->
@@ -778,7 +822,11 @@ defmodule PulsarEx.Connection do
     case :gen_tcp.send(state.socket, encode_command(request)) do
       :ok ->
         requests =
-          Map.put(state.requests, {:request_id, request.request_id}, {nil, Timex.now(), request})
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {nil, System.monotonic_time(), request}
+          )
 
         {:noreply, %{state | requests: requests}}
 
@@ -792,7 +840,7 @@ defmodule PulsarEx.Connection do
     {drop, requests} =
       state.requests
       |> Enum.split_with(fn {_, {_, ts, _}} ->
-        Timex.after?(Timex.now(), Timex.add(ts, Timex.Duration.from_milliseconds(@gc_interval)))
+        System.monotonic_time() - ts > @gc_interval
       end)
 
     :telemetry.execute(
@@ -894,17 +942,6 @@ defmodule PulsarEx.Connection do
 
       state
     else
-      {_, ts, _} = request_info
-
-      :telemetry.execute(
-        [:pulsar_ex, :connection, :response],
-        %{
-          latency:
-            DateTime.to_unix(Timex.now(), :millisecond) - DateTime.to_unix(ts, :millisecond)
-        },
-        Map.put(state.metadata, :type, response.__struct__)
-      )
-
       handle_response(response, payload, state)
     end
   end
@@ -913,7 +950,7 @@ defmodule PulsarEx.Connection do
   defp handle_response(%CommandProducerSuccess{producer_ready: true} = response, _, state) do
     {{pid, _} = from, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    latency = System.monotonic_time() - ts
 
     Logger.debug(
       "Created producer #{request.producer_id} on broker #{state.broker_name} after #{latency}ms"
@@ -942,7 +979,7 @@ defmodule PulsarEx.Connection do
   defp handle_response(%CommandProducerSuccess{} = response, _, state) do
     {_, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    latency = System.monotonic_time() - ts
 
     Logger.warn(
       "Producer #{request.producer_id} not ready on broker #{state.broker_name}, after #{latency}ms"
@@ -957,7 +994,7 @@ defmodule PulsarEx.Connection do
 
     case request_info do
       {{pid, _} = from, ts, %CommandSubscribe{} = request} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        latency = System.monotonic_time() - ts
 
         Logger.debug(
           "Subscribed to topic #{request.topic} for consumer #{request.consumer_id} on broker #{
@@ -986,7 +1023,7 @@ defmodule PulsarEx.Connection do
         %{state | consumers: consumers}
 
       {nil, ts, %CommandCloseProducer{producer_id: producer_id}} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        latency = System.monotonic_time() - ts
 
         Logger.debug(
           "Stopped producer #{producer_id} from broker #{state.broker_name}, after #{latency}ms"
@@ -995,7 +1032,7 @@ defmodule PulsarEx.Connection do
         state
 
       {nil, ts, %CommandCloseConsumer{consumer_id: consumer_id}} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        latency = System.monotonic_time() - ts
 
         Logger.debug(
           "Stopped consumer #{consumer_id} from broker #{state.broker_name}, after #{latency}ms"
@@ -1011,7 +1048,7 @@ defmodule PulsarEx.Connection do
 
     case request_info do
       {from, ts, %CommandProducer{} = request} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        latency = System.monotonic_time() - ts
 
         Logger.error(
           "Error connecting producer #{request.producer_id} to topic #{request.topic} on broker #{
@@ -1024,7 +1061,7 @@ defmodule PulsarEx.Connection do
         state
 
       {from, ts, %CommandSubscribe{} = request} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        latency = System.monotonic_time() - ts
 
         Logger.error(
           "Error subscribing to topic #{request.topic} for consumer #{request.consumer_id} on broker #{
@@ -1042,9 +1079,15 @@ defmodule PulsarEx.Connection do
     {{from, ts, _}, requests} =
       Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
 
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug, :reciept],
+      %{latency: System.monotonic_time() - ts},
+      state.metadata
+    )
+
     state = %{state | requests: requests}
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    latency = System.monotonic_time() - ts
 
     Logger.debug(
       "Received Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, after #{
@@ -1052,7 +1095,7 @@ defmodule PulsarEx.Connection do
       }ms"
     )
 
-    GenServer.reply(from, {:ok, response.message_id})
+    GenServer.reply(from, {:ok, response.message_id, System.monotonic_time()})
 
     state
   end
@@ -1061,9 +1104,15 @@ defmodule PulsarEx.Connection do
     {{from, ts, _}, requests} =
       Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
 
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug, :reciept],
+      %{latency: System.monotonic_time() - ts},
+      state.metadata
+    )
+
     state = %{state | requests: requests}
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    latency = System.monotonic_time() - ts
 
     Logger.error(
       "Received Send Error from broker #{state.broker_name} for producer #{response.producer_id}, #{
@@ -1071,7 +1120,7 @@ defmodule PulsarEx.Connection do
       }, after #{latency}ms"
     )
 
-    GenServer.reply(from, {:error, err})
+    GenServer.reply(from, {:error, err, System.monotonic_time()})
 
     state
   end
@@ -1080,7 +1129,7 @@ defmodule PulsarEx.Connection do
     {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    latency = System.monotonic_time() - ts
 
     Logger.debug(
       "Received Ack Response from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
@@ -1097,7 +1146,7 @@ defmodule PulsarEx.Connection do
     {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    latency = System.monotonic_time() - ts
 
     Logger.error(
       "Received Ack Error from broker #{state.broker_name} for consumer #{request.consumer_id}, #{

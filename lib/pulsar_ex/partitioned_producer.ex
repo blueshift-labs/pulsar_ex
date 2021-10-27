@@ -227,12 +227,17 @@ defmodule PulsarEx.PartitionedProducer do
   end
 
   @impl true
-  def handle_call({:produce, payload, message_opts, req_ts}, from, state) when is_list(message_opts) do
+  def handle_call({:produce, payload, message_opts, req_ts}, from, state)
+      when is_list(message_opts) do
     handle_call({:produce, payload, map_message_opts(message_opts), req_ts}, from, state)
   end
 
   @impl true
-  def handle_call({:produce, payload, %{} = message_opts, req_ts}, _from, %{batch_enabled: false} = state) do
+  def handle_call(
+        {:produce, payload, %{} = message_opts, req_ts},
+        _from,
+        %{batch_enabled: false} = state
+      ) do
     start = System.monotonic_time()
 
     :telemetry.execute(
@@ -264,7 +269,11 @@ defmodule PulsarEx.PartitionedProducer do
   end
 
   @impl true
-  def handle_call({:produce, payload, %{deliver_at_time: nil} = message_opts, req_ts}, from, state) do
+  def handle_call(
+        {:produce, payload, %{deliver_at_time: nil} = message_opts, req_ts},
+        from,
+        state
+      ) do
     :telemetry.execute(
       [:pulsar_ex, :producer, :debug],
       %{queue_time: System.monotonic_time() - req_ts},
