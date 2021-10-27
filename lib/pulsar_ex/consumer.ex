@@ -673,7 +673,7 @@ defmodule PulsarEx.Consumer do
       def handle_cast(:close, state) do
         Logger.warn("Received close command from connection for topic #{state.topic_name}")
 
-        {:stop, {:error, :closed}, state}
+        {:stop, {:shutdown, :closed}, state}
       end
 
       @impl true
@@ -728,16 +728,7 @@ defmodule PulsarEx.Consumer do
 
             state
 
-          {:shutdown, _} ->
-            Logger.debug(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
-                inspect(reason)
-              }"
-            )
-
-            state
-
-          {:error, :closed} ->
+          {:shutdown, :closed} ->
             Logger.debug(
               "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
                 inspect(reason)
@@ -751,6 +742,15 @@ defmodule PulsarEx.Consumer do
             )
 
             Process.sleep(@termination_timeout)
+            state
+
+          {:shutdown, _} ->
+            Logger.debug(
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
+                inspect(reason)
+              }"
+            )
+
             state
 
           _ ->

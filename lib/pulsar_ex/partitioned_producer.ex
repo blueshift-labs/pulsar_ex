@@ -377,13 +377,12 @@ defmodule PulsarEx.PartitionedProducer do
       }"
     )
 
-    {:stop, {:error, :closed}, state}
+    {:stop, {:shutdown, :closed}, state}
   end
 
   @impl true
   def terminate(reason, state) do
     {_, froms} = state.batch_queue |> Enum.reverse() |> Enum.unzip()
-    Enum.each(froms, &reply(&1, reason))
 
     case reason do
       :shutdown ->
@@ -392,6 +391,8 @@ defmodule PulsarEx.PartitionedProducer do
             state.broker_name
           }, #{inspect(reason)}"
         )
+
+        Enum.each(froms, &reply(&1, reason))
 
         state
 
@@ -402,18 +403,11 @@ defmodule PulsarEx.PartitionedProducer do
           }, #{inspect(reason)}"
         )
 
-        state
-
-      {:shutdown, _} ->
-        Logger.debug(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{
-            state.broker_name
-          }, #{inspect(reason)}"
-        )
+        Enum.each(froms, &reply(&1, reason))
 
         state
 
-      {:error, :closed} ->
+      {:shutdown, :closed} ->
         Logger.warn(
           "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{
             state.broker_name
@@ -426,7 +420,20 @@ defmodule PulsarEx.PartitionedProducer do
           state.metadata
         )
 
+        Enum.each(froms, &reply(&1, {:error, :closed}))
+
         Process.sleep(@termination_timeout)
+        state
+
+      {:shutdown, _} ->
+        Logger.debug(
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{
+            state.broker_name
+          }, #{inspect(reason)}"
+        )
+
+        Enum.each(froms, &reply(&1, reason))
+
         state
 
       _ ->
@@ -441,6 +448,8 @@ defmodule PulsarEx.PartitionedProducer do
           %{count: 1},
           state.metadata
         )
+
+        Enum.each(froms, &reply(&1, reason))
 
         state
     end
