@@ -72,11 +72,25 @@ defmodule PulsarEx.Connection do
   end
 
   def send_message(conn, %ProducerMessage{} = message) do
-    GenServer.call(conn, {:send, message}, @request_timeout)
+    start = System.monotonic_time()
+    reply = GenServer.call(conn, {:send, message, start}, @request_timeout)
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug],
+      %{duration: System.monotonic_time() - start},
+      %{}
+    )
+    reply
   end
 
   def send_messages(conn, messages) when is_list(messages) do
-    GenServer.call(conn, {:send, messages}, @request_timeout)
+    start = System.monotonic_time()
+    reply = GenServer.call(conn, {:send, messages, start}, @request_timeout)
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug],
+      %{duration: System.monotonic_time() - start},
+      %{}
+    )
+    reply
   end
 
   def subscribe(conn, topic, subscription, sub_type, opts \\ []) do
@@ -519,10 +533,16 @@ defmodule PulsarEx.Connection do
 
   @impl true
   def handle_call(
-        {:send, %ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} = message},
+        {:send, %ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} = message, req_ts},
         {pid, _} = from,
         state
       ) do
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug],
+      %{queue_time: System.monotonic_time() - req_ts},
+      %{}
+    )
+
     case Map.get(state.producers, pid) do
       {^producer_id, _} ->
         Logger.debug(
@@ -572,10 +592,16 @@ defmodule PulsarEx.Connection do
   @impl true
   def handle_call(
         {:send,
-         [%ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} | _] = messages},
+         [%ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} | _] = messages, req_ts},
         {pid, _} = from,
         state
       ) do
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :debug],
+      %{queue_time: System.monotonic_time() - req_ts},
+      %{}
+    )
+    
     case Map.get(state.producers, pid) do
       {^producer_id, _} ->
         Logger.debug(
