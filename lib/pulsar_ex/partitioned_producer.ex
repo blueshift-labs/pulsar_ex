@@ -248,9 +248,11 @@ defmodule PulsarEx.PartitionedProducer do
   end
 
   @impl true
-  def handle_call({:produce, payload, %{deliver_at_time: nil} = message_opts}, _from, state) do
+  def handle_call({:produce, payload, %{deliver_at_time: nil} = message_opts}, from, state) do
     {message, state} = create_message(payload, message_opts, state)
-    state = flush_batch_queue(%{state | batch_queue: [message | state.batch_queue]}, false)
+
+    state =
+      flush_batch_queue(%{state | batch_queue: [{message, from} | state.batch_queue]}, false)
 
     {:noreply, state}
   end
@@ -338,7 +340,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast({:produce, payload, %{deliver_at_time: nil} = message_opts}, state) do
     {message, state} = create_message(payload, message_opts, state)
-    state = flush_batch_queue(%{state | batch_queue: [message | state.batch_queue]}, false)
+    state = flush_batch_queue(%{state | batch_queue: [{message, nil} | state.batch_queue]}, false)
 
     {:noreply, state}
   end
