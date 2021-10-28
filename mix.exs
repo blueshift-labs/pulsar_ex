@@ -38,18 +38,9 @@ defmodule PulsarEx.MixProject do
       {:protobuf, "~> 0.7.1"},
       {:connection, "~> 1.1"},
       {:poolboy, "~> 1.5"},
-      {:timex, "~> 3.0"},
       {:telemetry, "~> 0.4"},
-      {:jason, "~> 1.2"},
-      # {:credo, "~> 1.5", only: [:dev], runtime: false},
-      # {:divo, "~> 1.3", only: [:test, :integration], override: true},
-      # {:divo_pulsar,
-      #  git: "https://github.com/blueshift-labs/divo_pulsar.git",
-      #  tag: "0.2.1",
-      #  only: [:test, :integration]},
-      # {:stream_data, "~> 0.5", only: [:test, :integration]},
-      {:dialyxir, "~> 1.1.0", only: :dev, runtime: false},
-      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
+      {:timex, "~> 3.0"},
+      {:jason, "~> 1.2"}
     ]
   end
 

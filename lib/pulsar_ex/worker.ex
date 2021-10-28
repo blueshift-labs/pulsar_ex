@@ -83,8 +83,6 @@ defmodule PulsarEx.Worker do
             ordering_key: message.ordering_key,
             deliver_at_time: message.deliver_at_time,
             redelivery_count: message.redelivery_count,
-            started_at: nil,
-            finished_at: nil,
             state: nil
           })
 
@@ -99,7 +97,7 @@ defmodule PulsarEx.Worker do
       defoverridable handle_job: 2
 
       def enqueue_job(job, params, message_opts \\ []) when job in @jobs do
-        start = System.monotonic_time()
+        start = System.monotonic_time(:millisecond)
 
         properties =
           Keyword.get(message_opts, :properties, [])
@@ -118,14 +116,14 @@ defmodule PulsarEx.Worker do
           {:ok, _} ->
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue, :success],
-              %{count: 1, duration: System.monotonic_time() - start},
+              %{count: 1, duration: System.monotonic_time(:millisecond) - start},
               %{topic: @topic, job: job}
             )
 
           {:error, _} ->
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue, :error],
-              %{count: 1, duration: System.monotonic_time() - start},
+              %{count: 1},
               %{topic: @topic, job: job}
             )
         end
@@ -134,7 +132,7 @@ defmodule PulsarEx.Worker do
       end
 
       def enqueue_job_async(job, params, message_opts \\ []) when job in @jobs do
-        start = System.monotonic_time()
+        start = System.monotonic_time(:millisecond)
 
         properties =
           Keyword.get(message_opts, :properties, [])
@@ -153,14 +151,14 @@ defmodule PulsarEx.Worker do
           {:ok, _} ->
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue_async, :success],
-              %{count: 1, duration: System.monotonic_time() - start},
+              %{count: 1, duration: System.monotonic_time(:millisecond) - start},
               %{topic: @topic, job: job}
             )
 
           {:error, _} ->
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue_async, :error],
-              %{count: 1, duration: System.monotonic_time() - start},
+              %{count: 1},
               %{topic: @topic, job: job}
             )
         end

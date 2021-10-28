@@ -216,8 +216,6 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:connect, %{state: :connecting} = state) do
-        start = System.monotonic_time()
-
         with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
              {:ok, pool} <- ConnectionManager.get_connection(broker),
              {:ok, reply} <-
@@ -271,7 +269,7 @@ defmodule PulsarEx.Consumer do
 
           :telemetry.execute(
             [:pulsar_ex, :consumer, :connect, :success],
-            %{count: 1, duration: System.monotonic_time() - start},
+            %{count: 1},
             state.metadata
           )
 
@@ -309,6 +307,8 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:acks, %{acks: acks} = state) do
+        start = System.monotonic_time(:millisecond)
+
         case Connection.ack(
                state.connection,
                state.consumer_id,
@@ -324,7 +324,11 @@ defmodule PulsarEx.Consumer do
 
             :telemetry.execute(
               [:pulsar_ex, :consumer, :ack, :success],
-              %{count: 1, acks: length(acks)},
+              %{
+                count: 1,
+                acks: length(acks),
+                duration: System.monotonic_time(:millisecond) - start
+              },
               state.metadata
             )
 
@@ -357,6 +361,8 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:nacks, %{nacks: nacks} = state) do
+        start = System.monotonic_time(:millisecond)
+
         {resend_messages, nacks} =
           Enum.split_with(nacks, fn {_, resend_ts} -> Timex.after?(Timex.now(), resend_ts) end)
 
@@ -373,7 +379,11 @@ defmodule PulsarEx.Consumer do
 
               :telemetry.execute(
                 [:pulsar_ex, :consumer, :nacks, :success],
-                %{count: 1, nacks: length(message_ids)},
+                %{
+                  count: 1,
+                  nacks: length(message_ids),
+                  duration: System.monotonic_time(:millisecond) - start
+                },
                 state.metadata
               )
 
@@ -529,6 +539,7 @@ defmodule PulsarEx.Consumer do
       end
 
       defp handle_flow_permits(state) do
+        start = System.monotonic_time(:millisecond)
         permits = min(state.receiving_queue_size - state.queue_size, state.permits)
 
         case Connection.flow_permits(state.connection, state.consumer_id, permits) do
@@ -541,7 +552,11 @@ defmodule PulsarEx.Consumer do
 
             :telemetry.execute(
               [:pulsar_ex, :consumer, :flow_permits, :success],
-              %{count: 1, permits: permits},
+              %{
+                count: 1,
+                permits: permits,
+                duration: System.monotonic_time(:millisecond) - start
+              },
               state.metadata
             )
 

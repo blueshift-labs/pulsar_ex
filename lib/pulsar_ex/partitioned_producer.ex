@@ -106,8 +106,6 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_info(:connect, %{state: :connecting} = state) do
-    start = System.monotonic_time()
-
     with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
          {:ok, pool} <- ConnectionManager.get_connection(broker),
          {:ok, reply} <- create_producer(pool, Topic.to_name(state.topic), state.producer_opts) do
@@ -151,7 +149,7 @@ defmodule PulsarEx.PartitionedProducer do
 
       :telemetry.execute(
         [:pulsar_ex, :producer, :connect, :success],
-        %{count: 1, duration: System.monotonic_time() - start},
+        %{count: 1},
         state.metadata
       )
 
@@ -223,7 +221,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_call({:produce, payload, %{} = message_opts}, _from, %{batch_enabled: false} = state) do
-    start = System.monotonic_time()
+    start = System.monotonic_time(:millisecond)
 
     {message, state} = create_message(payload, message_opts, state)
     reply = Connection.send_message(state.connection, message)
@@ -232,7 +230,7 @@ defmodule PulsarEx.PartitionedProducer do
       {:ok, _} ->
         :telemetry.execute(
           [:pulsar_ex, :producer, :send, :success],
-          %{count: 1, duration: System.monotonic_time() - start},
+          %{count: 1, duration: System.monotonic_time(:millisecond) - start},
           state.metadata
         )
 
@@ -259,7 +257,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_call({:produce, payload, message_opts}, _from, state) do
-    start = System.monotonic_time()
+    start = System.monotonic_time(:millisecond)
 
     {message, state} = create_message(payload, message_opts, state)
     reply = Connection.send_message(state.connection, message)
@@ -268,7 +266,7 @@ defmodule PulsarEx.PartitionedProducer do
       {:ok, _} ->
         :telemetry.execute(
           [:pulsar_ex, :producer, :send, :success],
-          %{count: 1, duration: System.monotonic_time() - start},
+          %{count: 1, duration: System.monotonic_time(:millisecond) - start},
           state.metadata
         )
 
@@ -313,7 +311,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_cast({:produce, payload, %{} = message_opts}, %{batch_enabled: false} = state) do
-    start = System.monotonic_time()
+    start = System.monotonic_time(:millisecond)
 
     {message, state} = create_message(payload, message_opts, state)
     reply = Connection.send_message(state.connection, message)
@@ -322,7 +320,7 @@ defmodule PulsarEx.PartitionedProducer do
       :ok ->
         :telemetry.execute(
           [:pulsar_ex, :producer, :send, :success],
-          %{count: 1, duration: System.monotonic_time() - start},
+          %{count: 1, duration: System.monotonic_time(:millisecond) - start},
           state.metadata
         )
 
@@ -347,7 +345,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_cast({:produce, payload, message_opts}, state) do
-    start = System.monotonic_time()
+    start = System.monotonic_time(:millisecond)
 
     {message, state} = create_message(payload, message_opts, state)
     reply = Connection.send_message(state.connection, message)
@@ -356,7 +354,7 @@ defmodule PulsarEx.PartitionedProducer do
       :ok ->
         :telemetry.execute(
           [:pulsar_ex, :producer, :send, :success],
-          %{count: 1, duration: System.monotonic_time() - start},
+          %{count: 1, duration: System.monotonic_time(:millisecond) - start},
           state.metadata
         )
 
@@ -464,7 +462,7 @@ defmodule PulsarEx.PartitionedProducer do
        do: state
 
   defp flush_batch_queue(state, _) do
-    start = System.monotonic_time()
+    start = System.monotonic_time(:millisecond)
 
     {messages, froms} = Enum.reverse(state.batch_queue) |> Enum.unzip()
     reply = Connection.send_messages(state.connection, messages)
@@ -473,7 +471,7 @@ defmodule PulsarEx.PartitionedProducer do
       {:ok, _} ->
         :telemetry.execute(
           [:pulsar_ex, :producer, :send, :success],
-          %{count: length(messages), duration: System.monotonic_time() - start},
+          %{count: length(messages), duration: System.monotonic_time(:millisecond) - start},
           state.metadata
         )
 
