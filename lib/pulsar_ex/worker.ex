@@ -35,22 +35,10 @@ defmodule PulsarEx.Worker do
       @producer_opts producer_opts
       @opts opts
 
-      def worker_spec(opts) do
-        workers = Keyword.get(opts, :workers) || Keyword.get(@opts, :workers)
-
-        opts =
-          case workers do
-            nil -> opts
-            workers -> Keyword.put(opts, :num_consumers, workers)
-          end
-
-        {
-          @topic,
-          @subscription,
-          __MODULE__,
-          Keyword.merge(@opts, opts)
-        }
-      end
+      def topic, do: @topic
+      def subscription, do: @subscription
+      def subscription_type, do: @subscription_type
+      def jobs, do: @jobs
 
       defp job_handler() do
         handler = fn %JobState{job: job, payload: payload} = job_state ->
@@ -83,8 +71,6 @@ defmodule PulsarEx.Worker do
             ordering_key: message.ordering_key,
             deliver_at_time: message.deliver_at_time,
             redelivery_count: message.redelivery_count,
-            started_at: nil,
-            finished_at: nil,
             state: nil
           })
 
@@ -99,7 +85,7 @@ defmodule PulsarEx.Worker do
       defoverridable handle_job: 2
 
       def enqueue_job(job, params, message_opts \\ []) when job in @jobs do
-        start = System.monotonic_time()
+        start = System.monotonic_time(:millisecond)
 
         properties =
           Keyword.get(message_opts, :properties, [])
@@ -107,7 +93,7 @@ defmodule PulsarEx.Worker do
           |> Map.put("job", job)
 
         reply =
-          PulsarEx.sync_produce(
+          PulsarEx.produce(
             @topic,
             Jason.encode!(params),
             Keyword.put(message_opts, :properties, properties),
@@ -118,14 +104,14 @@ defmodule PulsarEx.Worker do
           {:ok, _} ->
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue, :success],
-              %{count: 1, duration: System.monotonic_time() - start},
+              %{count: 1, duration: System.monotonic_time(:millisecond) - start},
               %{topic: @topic, job: job}
             )
 
           {:error, _} ->
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue, :error],
-              %{count: 1, duration: System.monotonic_time() - start},
+              %{count: 1},
               %{topic: @topic, job: job}
             )
         end
@@ -133,39 +119,12 @@ defmodule PulsarEx.Worker do
         reply
       end
 
-      def enqueue_job_async(job, params, message_opts \\ []) when job in @jobs do
-        start = System.monotonic_time()
+      def start(opts \\ []) do
+        PulsarEx.start_consumer(@topic, @subscription, __MODULE__, Keyword.merge(@opts, opts))
+      end
 
-        properties =
-          Keyword.get(message_opts, :properties, [])
-          |> Enum.into(%{})
-          |> Map.put("job", job)
-
-        reply =
-          PulsarEx.async_produce(
-            @topic,
-            Jason.encode!(params),
-            Keyword.put(message_opts, :properties, properties),
-            @producer_opts
-          )
-
-        case reply do
-          {:ok, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :worker, :enqueue_async, :success],
-              %{count: 1, duration: System.monotonic_time() - start},
-              %{topic: @topic, job: job}
-            )
-
-          {:error, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :worker, :enqueue_async, :error],
-              %{count: 1, duration: System.monotonic_time() - start},
-              %{topic: @topic, job: job}
-            )
-        end
-
-        reply
+      def stop() do
+        PulsarEx.stop_consumer(@topic, @subscription)
       end
     end
   end

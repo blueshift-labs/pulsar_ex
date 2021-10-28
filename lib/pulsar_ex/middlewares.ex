@@ -15,8 +15,6 @@ defmodule PulsarEx.JobState do
     :deliver_at_time,
     :redelivery_count,
     :payload,
-    :started_at,
-    :finished_at,
     :state
   ]
 
@@ -33,8 +31,6 @@ defmodule PulsarEx.JobState do
     :deliver_at_time,
     :redelivery_count,
     :payload,
-    :started_at,
-    :finished_at,
     :state
   ]
 end
@@ -57,15 +53,14 @@ defmodule PulsarEx.Middlewares.Logging do
   @impl true
   def call(handler) do
     fn %JobState{job: job} = job_state ->
-      started_at = Timex.now()
+      start = System.monotonic_time(:millisecond)
       Logger.debug("start processing job #{job}")
 
       Logger.debug("processing job #{job} with payload", payload: job_state.payload)
 
-      job_state = handler.(%JobState{job_state | started_at: started_at})
+      job_state = handler.(job_state)
 
-      finished_at = Timex.now()
-      duration = Timex.diff(finished_at, started_at, :milliseconds)
+      duration = System.monotonic_time(:millisecond) - start
 
       case job_state.state do
         :ok ->
@@ -83,7 +78,7 @@ defmodule PulsarEx.Middlewares.Logging do
           )
       end
 
-      %JobState{job_state | finished_at: finished_at}
+      job_state
     end
   end
 end
@@ -96,38 +91,32 @@ defmodule PulsarEx.Middlewares.Telemetry do
   @impl true
   def call(handler) do
     fn %JobState{job: job, topic: topic, subscription: subscription} = job_state ->
-      start = System.monotonic_time()
+      start = System.monotonic_time(:millisecond)
       metadata = %{job: job, topic: topic, subscription: subscription}
       job_state = handler.(job_state)
 
       case job_state do
         %JobState{state: :ok} ->
           :telemetry.execute(
-            [:pulsar_ex, :handle_job, :success],
-            %{count: 1},
+            [:pulsar_ex, :worker, :handle_job, :success],
+            %{count: 1, duration: System.monotonic_time(:millisecond) - start},
             metadata
           )
 
         %JobState{state: {:ok, _}} ->
           :telemetry.execute(
-            [:pulsar_ex, :handle_job, :success],
-            %{count: 1},
+            [:pulsar_ex, :worker, :handle_job, :success],
+            %{count: 1, duration: System.monotonic_time(:millisecond) - start},
             metadata
           )
 
         _ ->
           :telemetry.execute(
-            [:pulsar_ex, :handle_job, :error],
+            [:pulsar_ex, :worker, :handle_job, :error],
             %{count: 1},
             metadata
           )
       end
-
-      :telemetry.execute(
-        [:pulsar_ex, :handle_job],
-        %{duration: System.monotonic_time() - start},
-        metadata
-      )
 
       job_state
     end

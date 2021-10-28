@@ -4,8 +4,6 @@ defmodule PulsarEx.Connection do
       :broker,
       :broker_name,
       :request_id,
-      :producer_id,
-      :consumer_id,
       :requests,
       :producers,
       :consumers,
@@ -14,19 +12,17 @@ defmodule PulsarEx.Connection do
     ]
 
     defstruct [
-      :socket,
-      :max_message_size,
-      :last_server_ts,
       :broker,
       :broker_name,
       :request_id,
-      :producer_id,
-      :consumer_id,
       :requests,
       :producers,
       :consumers,
       :buffer,
-      :metadata
+      :metadata,
+      :socket,
+      :max_message_size,
+      :last_server_ts
     ]
   end
 
@@ -59,40 +55,46 @@ defmodule PulsarEx.Connection do
     CommandMessage
   }
 
-  @client_version "Pulsar Ex #{Mix.Project.config()[:version]}"
+  @client_version "PulsarEx #{Mix.Project.config()[:version]}"
   @protocol_version 13
 
   @connection_timeout 5000
   @ping_interval 45_000
-  @request_timeout 120_000
-  @gc_interval @request_timeout * 2
 
-  def create_producer(conn, topic, opts \\ []) do
-    GenServer.call(conn, {:create_producer, topic, opts}, @request_timeout)
+  def create_producer(conn, producer_id, topic, opts \\ []) do
+    GenServer.call(conn, {:create_producer, producer_id, topic, opts})
   end
 
-  def send_message(conn, %ProducerMessage{} = message) do
-    GenServer.call(conn, {:send, message}, @request_timeout)
+  def close_producer(conn, producer_id) do
+    GenServer.call(conn, {:close_producer, producer_id})
   end
 
-  def send_messages(conn, messages) when is_list(messages) do
-    GenServer.call(conn, {:send, messages}, @request_timeout)
+  def subscribe(conn, consumer_id, topic, subscription, sub_type, opts \\ []) do
+    GenServer.call(conn, {:subscribe, consumer_id, topic, subscription, sub_type, opts})
   end
 
-  def subscribe(conn, topic, subscription, sub_type, opts \\ []) do
-    GenServer.call(conn, {:subscribe, topic, subscription, sub_type, opts}, @request_timeout)
+  def stop_consumer(conn, consumer_id) do
+    GenServer.call(conn, {:stop_consumer, consumer_id})
+  end
+
+  def send_message(conn, producer_id, sequence_id, %ProducerMessage{} = message) do
+    GenServer.call(conn, {:send, producer_id, sequence_id, message})
+  end
+
+  def send_messages(conn, producer_id, sequence_id, messages) when is_list(messages) do
+    GenServer.call(conn, {:send, producer_id, sequence_id, messages})
   end
 
   def flow_permits(conn, consumer_id, permits) do
-    GenServer.call(conn, {:flow_permits, consumer_id, permits}, @request_timeout)
+    GenServer.call(conn, {:flow_permits, consumer_id, permits})
   end
 
   def redeliver(conn, consumer_id, msg_ids) do
-    GenServer.call(conn, {:redeliver, consumer_id, msg_ids}, @request_timeout)
+    GenServer.call(conn, {:redeliver, consumer_id, msg_ids})
   end
 
   def ack(conn, consumer_id, ack_type, msg_ids) do
-    GenServer.call(conn, {:ack, consumer_id, ack_type, msg_ids}, @request_timeout)
+    GenServer.call(conn, {:ack, consumer_id, ack_type, msg_ids})
   end
 
   def start_link(%Broker{} = broker) do
@@ -109,8 +111,6 @@ defmodule PulsarEx.Connection do
       broker: broker,
       broker_name: Broker.to_name(broker),
       request_id: 0,
-      producer_id: 0,
-      consumer_id: 0,
       requests: %{},
       producers: %{},
       consumers: %{},
@@ -123,24 +123,25 @@ defmodule PulsarEx.Connection do
 
   @impl true
   def connect(:init, %{broker: broker} = state) do
-    start = System.monotonic_time()
-
     with {:ok, socket} <- do_connect(broker.host, broker.port),
          {:ok, max_message_size} <- do_handshake(socket) do
       :inet.setopts(socket, active: :once)
       Process.send_after(self(), :send_ping, @ping_interval)
       Logger.debug("Connection established to broker #{state.broker_name}")
 
-      Process.send_after(self(), :gc, @gc_interval)
-
       :telemetry.execute(
         [:pulsar_ex, :connection, :success],
-        %{count: 1, duration: System.monotonic_time() - start},
+        %{count: 1},
         state.metadata
       )
 
       {:ok,
-       %{state | socket: socket, last_server_ts: Timex.now(), max_message_size: max_message_size}}
+       %{
+         state
+         | socket: socket,
+           last_server_ts: System.monotonic_time(:millisecond),
+           max_message_size: max_message_size
+       }}
     else
       {:error, _} = err ->
         :telemetry.execute(
@@ -225,15 +226,17 @@ defmodule PulsarEx.Connection do
 
   # ================== handle_call! =====================
   @impl true
-  def handle_call({:create_producer, topic, opts}, from, state) do
-    Logger.debug("Creating producer for topic #{topic}, on broker #{state.broker_name}")
+  def handle_call({:create_producer, producer_id, topic, opts}, from, state) do
+    Logger.debug("Creating producer #{producer_id} on broker #{state.broker_name}")
 
     request =
       CommandProducer.new(
-        topic: topic,
         request_id: state.request_id,
-        producer_id: state.producer_id
+        producer_id: producer_id,
+        topic: topic
       )
+
+    state = %{state | request_id: state.request_id + 1}
 
     request =
       case Keyword.get(opts, :producer_name) do
@@ -255,18 +258,14 @@ defmodule PulsarEx.Connection do
 
     request = %{request | metadata: Keyword.get(opts, :properties) |> to_kv()}
 
-    state = %{state | request_id: state.request_id + 1, producer_id: state.producer_id + 1}
-
     case :gen_tcp.send(state.socket, encode_command(request)) do
       :ok ->
-        :telemetry.execute(
-          [:pulsar_ex, :connection, :create_producer, :success],
-          %{count: 1},
-          state.metadata
-        )
-
         requests =
-          Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {from, System.monotonic_time(:millisecond), request}
+          )
 
         {:noreply, %{state | requests: requests}}
 
@@ -282,21 +281,53 @@ defmodule PulsarEx.Connection do
   end
 
   @impl true
-  def handle_call({:subscribe, topic, subscription, sub_type, opts}, from, state) do
+  def handle_call({:close_producer, producer_id}, _from, state) do
+    Logger.debug("Closing producer #{producer_id} on broker #{state.broker_name}")
+
+    producers = Map.delete(state.producers, producer_id)
+
+    request =
+      CommandCloseProducer.new(
+        request_id: state.request_id,
+        producer_id: producer_id
+      )
+
+    state = %{state | request_id: state.request_id + 1, producers: producers}
+
+    case :gen_tcp.send(state.socket, encode_command(request)) do
+      :ok ->
+        requests =
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {nil, System.monotonic_time(:millisecond), request}
+          )
+
+        {:reply, :ok, %{state | requests: requests}}
+
+      {:error, _} = err ->
+        {:disconnect, err, err, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:subscribe, consumer_id, topic, subscription, sub_type, opts}, from, state) do
     Logger.debug(
-      "Subscribing to topic #{topic} with subscription #{subscription}, on broker #{
-        state.broker_name
-      }"
+      "Subscribing consumer #{consumer_id} to topic #{topic} with subscription #{subscription} in #{
+        sub_type
+      } mode, on broker #{state.broker_name}"
     )
 
     request =
       CommandSubscribe.new(
+        request_id: state.request_id,
+        consumer_id: consumer_id,
         topic: topic,
         subscription: subscription,
-        subType: subscription_type(sub_type),
-        consumer_id: state.consumer_id,
-        request_id: state.request_id
+        subType: subscription_type(sub_type)
       )
+
+    state = %{state | request_id: state.request_id + 1}
 
     request =
       case Keyword.get(opts, :consumer_name) do
@@ -336,18 +367,14 @@ defmodule PulsarEx.Connection do
 
     request = %{request | metadata: Keyword.get(opts, :properties) |> to_kv()}
 
-    state = %{state | consumer_id: request.consumer_id + 1, request_id: request.request_id + 1}
-
     case :gen_tcp.send(state.socket, encode_command(request)) do
       :ok ->
-        :telemetry.execute(
-          [:pulsar_ex, :connection, :subscribe, :success],
-          %{count: 1},
-          state.metadata
-        )
-
         requests =
-          Map.put(state.requests, {:request_id, request.request_id}, {from, Timex.now(), request})
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {from, System.monotonic_time(:millisecond), request}
+          )
 
         {:noreply, %{state | requests: requests}}
 
@@ -363,264 +390,212 @@ defmodule PulsarEx.Connection do
   end
 
   @impl true
-  def handle_call({:flow_permits, consumer_id, permits}, {pid, _}, state) do
-    case Map.get(state.consumers, pid) do
-      {^consumer_id, _} ->
-        Logger.debug(
-          "Sending flow permits #{permits} to broker #{state.broker_name} for consumer #{
-            consumer_id
-          }"
-        )
+  def handle_call({:stop_consumer, consumer_id}, _from, state) do
+    Logger.debug("Stopping consumer #{consumer_id} on broker #{state.broker_name}")
 
-        command =
-          CommandFlow.new(
-            consumer_id: consumer_id,
-            messagePermits: permits
+    consumers = Map.delete(state.consumers, consumer_id)
+
+    request =
+      CommandCloseConsumer.new(
+        request_id: state.request_id,
+        consumer_id: consumer_id
+      )
+
+    state = %{state | request_id: state.request_id + 1, consumers: consumers}
+
+    case :gen_tcp.send(state.socket, encode_command(request)) do
+      :ok ->
+        requests =
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {nil, System.monotonic_time(:millisecond), request}
           )
 
-        case :gen_tcp.send(state.socket, encode_command(command)) do
-          :ok ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :flow_permits, :success],
-              %{count: 1},
-              state.metadata
-            )
+        {:reply, :ok, %{state | requests: requests}}
 
-            {:reply, :ok, state}
-
-          {:error, _} = err ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :flow_permits, :error],
-              %{count: 1},
-              state.metadata
-            )
-
-            {:disconnect, err, err, state}
-        end
-
-      _ ->
-        :telemetry.execute(
-          [:pulsar_ex, :connection, :flow_permits, :closed],
-          %{count: 1},
-          state.metadata
-        )
-
-        {:reply, {:error, :closed}, state}
+      {:error, _} = err ->
+        {:disconnect, err, err, state}
     end
   end
 
   @impl true
-  def handle_call({:ack, consumer_id, ack_type, msg_ids}, {pid, _} = from, state)
+  def handle_call({:flow_permits, consumer_id, permits}, _from, state) do
+    Logger.debug(
+      "Sending Flow with #{permits} permits to broker #{state.broker_name} for consumer #{
+        consumer_id
+      }"
+    )
+
+    command =
+      CommandFlow.new(
+        consumer_id: consumer_id,
+        messagePermits: permits
+      )
+
+    case :gen_tcp.send(state.socket, encode_command(command)) do
+      :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :flow_permits, :success],
+          %{count: 1},
+          state.metadata
+        )
+
+        {:reply, :ok, state}
+
+      {:error, _} = err ->
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :flow_permits, :error],
+          %{count: 1},
+          state.metadata
+        )
+
+        {:disconnect, err, err, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:redeliver, consumer_id, msg_ids}, _from, state) when is_list(msg_ids) do
+    Logger.debug(
+      "Sending #{length(msg_ids)} redeliver to broker #{state.broker_name} for consumer #{
+        consumer_id
+      }"
+    )
+
+    command =
+      CommandRedeliverUnacknowledgedMessages.new(
+        consumer_id: consumer_id,
+        message_ids: msg_ids
+      )
+
+    case :gen_tcp.send(state.socket, encode_command(command)) do
+      :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :redeliver, :success],
+          %{count: 1},
+          state.metadata
+        )
+
+        {:reply, :ok, state}
+
+      {:error, _} = err ->
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :redeliver, :error],
+          %{count: 1},
+          state.metadata
+        )
+
+        {:disconnect, err, err, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:ack, consumer_id, ack_type, msg_ids}, from, state)
       when is_list(msg_ids) do
-    case Map.get(state.consumers, pid) do
-      {^consumer_id, _} ->
-        Logger.debug(
-          "Sending #{length(msg_ids)} acks to broker #{state.broker_name} for consumer #{
-            consumer_id
-          }"
-        )
+    Logger.debug(
+      "Sending #{length(msg_ids)} acks to broker #{state.broker_name} for consumer #{consumer_id}"
+    )
 
-        request =
-          CommandAck.new(
-            ack_type: ack_type(ack_type),
-            consumer_id: consumer_id,
-            request_id: state.request_id,
-            message_id: msg_ids,
-            txnid_least_bits: nil,
-            txnid_most_bits: nil
+    request =
+      CommandAck.new(
+        request_id: state.request_id,
+        consumer_id: consumer_id,
+        ack_type: ack_type(ack_type),
+        message_id: msg_ids,
+        txnid_least_bits: nil,
+        txnid_most_bits: nil
+      )
+
+    state = %{state | request_id: state.request_id + 1}
+
+    case :gen_tcp.send(state.socket, encode_command(request)) do
+      :ok ->
+        requests =
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {from, System.monotonic_time(:millisecond), request}
           )
 
-        state = %{state | request_id: request.request_id + 1}
+        {:noreply, %{state | requests: requests}}
 
-        case :gen_tcp.send(state.socket, encode_command(request)) do
-          :ok ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :ack, :success],
-              %{count: 1},
-              state.metadata
-            )
-
-            requests =
-              Map.put(
-                state.requests,
-                {:request_id, request.request_id},
-                {from, Timex.now(), request}
-              )
-
-            {:noreply, %{state | requests: requests}}
-
-          {:error, _} = err ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :ack, :error],
-              %{count: 1},
-              state.metadata
-            )
-
-            {:disconnect, err, err, state}
-        end
-
-      _ ->
+      {:error, _} = err ->
         :telemetry.execute(
-          [:pulsar_ex, :connection, :ack, :closed],
+          [:pulsar_ex, :connection, :ack, :error],
           %{count: 1},
           state.metadata
         )
 
-        {:reply, {:error, :closed}, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:redeliver, consumer_id, msg_ids}, {pid, _}, state) when is_list(msg_ids) do
-    case Map.get(state.consumers, pid) do
-      {^consumer_id, _} ->
-        Logger.debug(
-          "Sending #{length(msg_ids)} redeliver to broker #{state.broker_name} for consumer #{
-            consumer_id
-          }"
-        )
-
-        command =
-          CommandRedeliverUnacknowledgedMessages.new(
-            consumer_id: consumer_id,
-            message_ids: msg_ids
-          )
-
-        case :gen_tcp.send(state.socket, encode_command(command)) do
-          :ok ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :redeliver, :success],
-              %{count: 1},
-              state.metadata
-            )
-
-            {:reply, :ok, state}
-
-          {:error, _} = err ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :redeliver, :error],
-              %{count: 1},
-              state.metadata
-            )
-
-            {:disconnect, err, err, state}
-        end
-
-      _ ->
-        :telemetry.execute(
-          [:pulsar_ex, :connection, :redeliver, :closed],
-          %{count: 1},
-          state.metadata
-        )
-
-        {:reply, {:error, :closed}, state}
+        {:disconnect, err, err, state}
     end
   end
 
   @impl true
   def handle_call(
-        {:send, %ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} = message},
-        {pid, _} = from,
+        {:send, producer_id, sequence_id, messages},
+        from,
         state
-      ) do
-    case Map.get(state.producers, pid) do
-      {^producer_id, _} ->
-        Logger.debug(
-          "Producing message to broker #{state.broker_name} for producer #{producer_id}"
-        )
+      )
+      when is_list(messages) do
+    Logger.debug(
+      "Producing #{length(messages)} messages in batch to broker #{state.broker_name} for producer #{
+        producer_id
+      }"
+    )
 
-        request = encode_message(message)
+    request = encode_messages(messages)
 
-        case :gen_tcp.send(state.socket, request) do
-          :ok ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :send, :success],
-              %{count: 1},
-              state.metadata
-            )
+    case :gen_tcp.send(state.socket, request) do
+      :ok ->
+        requests =
+          Map.put(
+            state.requests,
+            {:sequence_id, producer_id, sequence_id},
+            {from, System.monotonic_time(:millisecond), request}
+          )
 
-            requests =
-              Map.put(
-                state.requests,
-                {:sequence_id, producer_id, sequence_id},
-                {from, Timex.now(), request}
-              )
+        {:noreply, %{state | requests: requests}}
 
-            {:noreply, %{state | requests: requests}}
-
-          {:error, _} = err ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :send, :error],
-              %{count: 1},
-              state.metadata
-            )
-
-            {:disconnect, err, err, state}
-        end
-
-      _ ->
+      {:error, _} = err ->
         :telemetry.execute(
-          [:pulsar_ex, :connection, :send, :closed],
+          [:pulsar_ex, :connection, :send, :error],
           %{count: 1},
           state.metadata
         )
 
-        {:reply, {:error, :closed}, state}
+        {:disconnect, err, err, state}
     end
   end
 
   @impl true
   def handle_call(
-        {:send,
-         [%ProducerMessage{producer_id: producer_id, sequence_id: sequence_id} | _] = messages},
-        {pid, _} = from,
+        {:send, producer_id, sequence_id, message},
+        from,
         state
       ) do
-    case Map.get(state.producers, pid) do
-      {^producer_id, _} ->
-        Logger.debug(
-          "Producing #{length(messages)} messages in batch to broker #{state.broker_name} for producer #{
-            producer_id
-          }"
-        )
+    Logger.debug("Producing message to broker #{state.broker_name} for producer #{producer_id}")
 
-        request = encode_messages(messages)
+    request = encode_message(message)
 
-        case :gen_tcp.send(state.socket, request) do
-          :ok ->
-            requests =
-              Map.put(
-                state.requests,
-                {:sequence_id, producer_id, sequence_id},
-                {from, Timex.now(), request}
-              )
+    case :gen_tcp.send(state.socket, request) do
+      :ok ->
+        requests =
+          Map.put(
+            state.requests,
+            {:sequence_id, producer_id, sequence_id},
+            {from, System.monotonic_time(:millisecond), request}
+          )
 
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :send, :success],
-              %{count: 1},
-              state.metadata
-            )
+        {:noreply, %{state | requests: requests}}
 
-            {:noreply, %{state | requests: requests}}
-
-          {:error, _} = err ->
-            :telemetry.execute(
-              [:pulsar_ex, :connection, :send, :error],
-              %{count: 1},
-              state.metadata
-            )
-
-            {:disconnect, err, err, state}
-        end
-
-      _ ->
+      {:error, _} = err ->
         :telemetry.execute(
-          [:pulsar_ex, :connection, :send, :closed],
+          [:pulsar_ex, :connection, :send, :error],
           %{count: 1},
           state.metadata
         )
 
-        {:reply, {:error, :closed}, state}
+        {:disconnect, err, err, state}
     end
   end
 
@@ -651,42 +626,29 @@ defmodule PulsarEx.Connection do
     messages
     |> Enum.filter(&match?({%CommandMessage{}, _}, &1))
     |> Enum.reduce(%{}, fn {command, msgs}, acc ->
-      msgs = msgs ++ Map.get(acc, command.consumer_id, [])
-      Map.put(acc, command.consumer_id, msgs)
+      Map.merge(acc, %{command.consumer_id => msgs}, fn _, m1, m2 -> m1 ++ m2 end)
     end)
     |> Enum.each(fn {consumer_id, msgs} ->
-      case Enum.find(state.consumers, &match?({_, {^consumer_id, _}}, &1)) do
-        nil ->
-          Logger.warn(
-            "Received #{length(msgs)} messages from broker #{state.broker_name} for missing consumer #{
-              consumer_id
-            }"
-          )
+      Logger.debug(
+        "Received #{length(msgs)} messages from broker #{state.broker_name} for consumer #{
+          consumer_id
+        }"
+      )
 
-        {consumer, _} ->
-          Logger.debug(
-            "Received #{length(msgs)} messages from broker #{state.broker_name} for consumer #{
-              consumer_id
-            }"
-          )
-
-          GenServer.cast(consumer, {:messages, msgs})
-      end
+      pid = Map.get(state.consumers, consumer_id)
+      GenServer.cast(pid, {:messages, msgs})
     end)
 
     :inet.setopts(socket, active: :once)
-    {:noreply, %{state | buffer: buffer, last_server_ts: Timex.now()}}
+    {:noreply, %{state | buffer: buffer, last_server_ts: System.monotonic_time(:millisecond)}}
   end
 
   @impl true
   def handle_info(:send_ping, state) do
-    Logger.debug("Sending ping command to broker #{state.broker_name}")
+    Logger.debug("Sending Ping to broker #{state.broker_name}")
 
     cond do
-      Timex.after?(
-        Timex.now(),
-        Timex.add(state.last_server_ts, Timex.Duration.from_milliseconds(@ping_interval))
-      ) ->
+      System.monotonic_time(:millisecond) - state.last_server_ts > 2 * @ping_interval ->
         {:disconnect, {:error, :closed}, state}
 
       true ->
@@ -703,7 +665,7 @@ defmodule PulsarEx.Connection do
 
   @impl true
   def handle_info(:send_pong, state) do
-    Logger.debug("Sending pong command to broker #{state.broker_name}")
+    Logger.debug("Sending Pong to broker #{state.broker_name}")
 
     case :gen_tcp.send(state.socket, encode_command(CommandPong.new())) do
       :ok -> {:noreply, state}
@@ -711,84 +673,16 @@ defmodule PulsarEx.Connection do
     end
   end
 
-  @impl true
-  def handle_info({:DOWN, ref, _, pid, _}, state) do
-    Process.demonitor(ref)
-
-    producer_id = Map.get(state.producers, pid)
-    consumer_id = Map.get(state.consumers, pid)
-
-    {request, state} =
-      case {producer_id, consumer_id} do
-        {{producer_id, _}, nil} ->
-          Logger.debug("Detected producer #{producer_id} down on broker #{state.broker_name}")
-
-          {{_, ref}, producers} = Map.pop(state.producers, pid)
-          Process.demonitor(ref)
-
-          request =
-            CommandCloseProducer.new(
-              request_id: state.request_id,
-              producer_id: producer_id
-            )
-
-          {request, %{state | producers: producers, request_id: state.request_id + 1}}
-
-        {nil, {consumer_id, _}} ->
-          Logger.debug("Detected consumer #{consumer_id} down on broker #{state.broker_name}")
-
-          {{_, ref}, consumers} = Map.pop(state.consumers, pid)
-          Process.demonitor(ref)
-
-          request =
-            CommandCloseConsumer.new(
-              request_id: state.request_id,
-              consumer_id: consumer_id
-            )
-
-          {request, %{state | consumers: consumers, request_id: state.request_id + 1}}
-      end
-
-    case :gen_tcp.send(state.socket, encode_command(request)) do
-      :ok ->
-        requests =
-          Map.put(state.requests, {:request_id, request.request_id}, {nil, Timex.now(), request})
-
-        {:noreply, %{state | requests: requests}}
-
-      {:error, _} = err ->
-        {:disconnect, err, state}
-    end
-  end
-
-  @impl true
-  def handle_info(:gc, state) do
-    {drop, requests} =
-      state.requests
-      |> Enum.split_with(fn {_, {_, ts, _}} ->
-        Timex.after?(Timex.now(), Timex.add(ts, Timex.Duration.from_milliseconds(@gc_interval)))
-      end)
-
-    :telemetry.execute(
-      [:pulsar_ex, :connection, :gc],
-      %{count: length(drop)},
-      state.metadata
-    )
-
-    Process.send_after(self(), :gc, @gc_interval)
-    {:noreply, %{state | requests: Enum.into(requests, %{})}}
-  end
-
   # ================== handle_command! =====================
   defp handle_command(%CommandPing{}, _, state) do
-    Logger.debug("Received ping command from broker #{state.broker_name}")
+    Logger.debug("Received Ping from broker #{state.broker_name}")
 
     Process.send(self(), :send_pong, [])
     state
   end
 
   defp handle_command(%CommandPong{}, _, state) do
-    Logger.debug("Received pong command from broker #{state.broker_name}")
+    Logger.debug("Received Pong from broker #{state.broker_name}")
 
     state
   end
@@ -797,276 +691,262 @@ defmodule PulsarEx.Connection do
   defp handle_command(%CommandMessage{}, _, state), do: state
 
   defp handle_command(%CommandCloseProducer{producer_id: producer_id}, _, state) do
-    case Enum.find(state.producers, &match?({_, {^producer_id, _}}, &1)) do
-      {producer, {producer_id, ref}} ->
-        Logger.warn(
-          "Received Close Producer command from broker #{state.broker_name} for producer #{
-            producer_id
-          }"
-        )
+    Logger.warn(
+      "Received CloseProducer from broker #{state.broker_name} for producer #{producer_id}"
+    )
 
-        Process.demonitor(ref)
-        producers = Map.delete(state.producers, producer)
+    {pid, producers} = Map.pop(state.producers, producer_id)
+    GenServer.cast(pid, :close)
 
-        GenServer.cast(producer, :close)
-
-        %{state | producers: producers}
-
-      nil ->
-        Logger.error(
-          "Received Close Producer command from broker #{state.broker_name} for missing producer"
-        )
-
-        state
-    end
+    %{state | producers: producers}
   end
 
   defp handle_command(%CommandCloseConsumer{consumer_id: consumer_id}, _, state) do
-    case Enum.find(state.consumers, &match?({_, {^consumer_id, _}}, &1)) do
-      {consumer, {consumer_id, ref}} ->
-        Logger.warn(
-          "Received Close Consumer command from broker #{state.broker_name} for consumer #{
-            consumer_id
-          }"
-        )
-
-        Process.demonitor(ref)
-        consumers = Map.delete(state.consumers, consumer)
-
-        GenServer.cast(consumer, :close)
-
-        %{state | consumers: consumers}
-
-      nil ->
-        Logger.error(
-          "Received Close Consumer command from broker #{state.broker_name} for missing consumer"
-        )
-
-        state
-    end
-  end
-
-  defp handle_command(%{request_id: request_id} = response, payload, state) do
-    if Map.get(state.requests, {:request_id, request_id}) == nil do
-      Logger.warn(
-        "Received unexpected response #{inspect(response)} from broker #{state.broker_name}"
-      )
-
-      state
-    else
-      handle_response(response, payload, state)
-    end
-  end
-
-  defp handle_command(%{sequence_id: sequence_id} = response, payload, state) do
-    if Map.get(state.requests, {:sequence_id, response.producer_id, sequence_id}) == nil do
-      Logger.warn(
-        "Received unexpected response #{inspect(response)} from broker #{state.broker_name}"
-      )
-
-      state
-    else
-      handle_response(response, payload, state)
-    end
-  end
-
-  # ================== handle_response! =====================
-  defp handle_response(%CommandProducerSuccess{producer_ready: true} = response, _, state) do
-    {{pid, _} = from, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
-
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
-
-    Logger.debug(
-      "Created producer #{request.producer_id} on broker #{state.broker_name} after #{latency}ms"
+    Logger.warn(
+      "Received CloseConsumer from broker #{state.broker_name} for consumer #{consumer_id}"
     )
 
-    ref = Process.monitor(pid)
+    {pid, consumers} = Map.pop(state.consumers, consumer_id)
+    GenServer.cast(pid, :close)
 
-    producers = Map.put(state.producers, pid, {request.producer_id, ref})
+    %{state | consumers: consumers}
+  end
+
+  defp handle_command(%CommandProducerSuccess{producer_ready: true} = response, _, state) do
+    {{pid, _} = from, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
+
+    duration = System.monotonic_time(:millisecond) - ts
+
+    Logger.debug(
+      "Created producer #{request.producer_id} on broker #{state.broker_name} after #{duration}ms"
+    )
+
     requests = Map.delete(state.requests, {:request_id, response.request_id})
 
     reply = %{
-      topic: request.topic,
       producer_id: request.producer_id,
       producer_name: response.producer_name,
-      producer_access_mode: request.producer_access_mode,
       last_sequence_id: response.last_sequence_id,
       max_message_size: state.max_message_size,
-      properties: from_kv(request.metadata),
-      connection: self()
+      producer_access_mode: request.producer_access_mode,
+      properties: from_kv(request.metadata)
     }
 
     GenServer.reply(from, {:ok, reply})
+
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :create_producer, :success],
+      %{count: 1, duration: duration},
+      state.metadata
+    )
+
+    producers = Map.put(state.producers, request.producer_id, pid)
     %{state | requests: requests, producers: producers}
   end
 
-  defp handle_response(%CommandProducerSuccess{} = response, _, state) do
+  defp handle_command(%CommandProducerSuccess{} = response, _, state) do
     {_, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    duration = System.monotonic_time(:millisecond) - ts
 
     Logger.warn(
-      "Producer #{request.producer_id} not ready on broker #{state.broker_name}, after #{latency}ms"
+      "Producer #{request.producer_id} not ready on broker #{state.broker_name}, after #{duration}ms"
     )
 
     state
   end
 
-  defp handle_response(%CommandSuccess{} = response, _, state) do
+  defp handle_command(%CommandSuccess{} = response, _, state) do
     {request_info, requests} = Map.pop(state.requests, {:request_id, response.request_id})
     state = %{state | requests: requests}
 
     case request_info do
       {{pid, _} = from, ts, %CommandSubscribe{} = request} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        duration = System.monotonic_time(:millisecond) - ts
 
         Logger.debug(
-          "Subscribed to topic #{request.topic} for consumer #{request.consumer_id} on broker #{
-            state.broker_name
-          }, after #{latency}ms"
+          "Subscribed consumer #{request.consumer_id} on broker #{state.broker_name}, after #{
+            duration
+          }ms"
         )
 
-        ref = Process.monitor(pid)
-        consumers = Map.put(state.consumers, pid, {request.consumer_id, ref})
-
         reply = %{
-          topic: request.topic,
-          subscription: request.subscription,
+          consumer_name: request.consumer_name,
           subscription_type: request.subType,
           priority_level: request.priority_level,
           read_compacted: request.read_compacted,
           initial_position: request.initialPosition,
-          consumer_id: request.consumer_id,
-          consumer_name: request.consumer_name,
-          properties: from_kv(request.metadata),
-          connection: self()
+          properties: from_kv(request.metadata)
         }
 
         GenServer.reply(from, {:ok, reply})
 
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :subscribe, :success],
+          %{count: 1, duration: duration},
+          state.metadata
+        )
+
+        consumers = Map.put(state.consumers, request.consumer_id, pid)
         %{state | consumers: consumers}
 
       {nil, ts, %CommandCloseProducer{producer_id: producer_id}} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        duration = System.monotonic_time(:millisecond) - ts
 
         Logger.debug(
-          "Stopped producer #{producer_id} from broker #{state.broker_name}, after #{latency}ms"
+          "Stopped producer #{producer_id} from broker #{state.broker_name}, after #{duration}ms"
         )
 
         state
 
       {nil, ts, %CommandCloseConsumer{consumer_id: consumer_id}} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        duration = System.monotonic_time(:millisecond) - ts
 
         Logger.debug(
-          "Stopped consumer #{consumer_id} from broker #{state.broker_name}, after #{latency}ms"
+          "Stopped consumer #{consumer_id} from broker #{state.broker_name}, after #{duration}ms"
         )
 
         state
     end
   end
 
-  defp handle_response(%CommandError{error: err} = response, _, state) do
+  defp handle_command(%CommandError{error: err} = response, _, state) do
     {request_info, requests} = Map.pop(state.requests, {:request_id, response.request_id})
     state = %{state | requests: requests}
 
     case request_info do
       {from, ts, %CommandProducer{} = request} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        duration = System.monotonic_time(:millisecond) - ts
 
         Logger.error(
-          "Error connecting producer #{request.producer_id} to topic #{request.topic} on broker #{
-            state.broker_name
-          }, after #{latency}ms, #{inspect(err)}"
+          "Error connecting producer #{request.producer_id} on broker #{state.broker_name}, after #{
+            duration
+          }ms, #{inspect(err)}"
         )
 
         GenServer.reply(from, {:error, err})
+
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :create_producer, :error],
+          %{count: 1},
+          state.metadata
+        )
 
         state
 
       {from, ts, %CommandSubscribe{} = request} ->
-        latency = Timex.diff(Timex.now(), ts, :milliseconds)
+        duration = System.monotonic_time(:millisecond) - ts
 
         Logger.error(
           "Error subscribing to topic #{request.topic} for consumer #{request.consumer_id} on broker #{
             state.broker_name
-          }, after #{latency}ms, #{inspect(err)}"
+          }, after #{duration}ms, #{inspect(err)}"
         )
 
         GenServer.reply(from, {:error, err})
+
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :subscribe, :error],
+          %{count: 1},
+          state.metadata
+        )
 
         state
     end
   end
 
-  defp handle_response(%CommandSendReceipt{} = response, _, state) do
+  defp handle_command(%CommandSendReceipt{} = response, _, state) do
     {{from, ts, _}, requests} =
       Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
 
     state = %{state | requests: requests}
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    duration = System.monotonic_time(:millisecond) - ts
 
     Logger.debug(
       "Received Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, after #{
-        latency
+        duration
       }ms"
     )
 
     GenServer.reply(from, {:ok, response.message_id})
 
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :send, :success],
+      %{count: 1, duration: duration},
+      state.metadata
+    )
+
     state
   end
 
-  defp handle_response(%CommandSendError{error: err} = response, _, state) do
+  defp handle_command(%CommandSendError{error: err} = response, _, state) do
     {{from, ts, _}, requests} =
       Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
 
     state = %{state | requests: requests}
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    duration = System.monotonic_time(:millisecond) - ts
 
     Logger.error(
       "Received Send Error from broker #{state.broker_name} for producer #{response.producer_id}, #{
         inspect(err)
-      }, after #{latency}ms"
+      }, after #{duration}ms"
     )
 
     GenServer.reply(from, {:error, err})
 
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :send, :error],
+      %{count: 1},
+      state.metadata
+    )
+
     state
   end
 
-  defp handle_response(%CommandAckResponse{request_id: request_id, error: nil}, _, state) do
+  defp handle_command(%CommandAckResponse{request_id: request_id, error: nil}, _, state) do
     {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    duration = System.monotonic_time(:millisecond) - ts
 
     Logger.debug(
       "Received Ack Response from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
-        inspect(latency)
+        inspect(duration)
       }ms"
     )
 
     GenServer.reply(from, :ok)
 
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :ack, :success],
+      %{count: 1, duration: duration},
+      state.metadata
+    )
+
     state
   end
 
-  defp handle_response(%CommandAckResponse{request_id: request_id, error: err}, _, state) do
+  defp handle_command(%CommandAckResponse{request_id: request_id, error: err}, _, state) do
     {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
-    latency = Timex.diff(Timex.now(), ts, :milliseconds)
+    duration = System.monotonic_time(:millisecond) - ts
 
     Logger.error(
       "Received Ack Error from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
         inspect(err)
-      }, after #{latency}ms"
+      }, after #{duration}ms"
     )
 
     GenServer.reply(from, {:error, err})
+
+    :telemetry.execute(
+      [:pulsar_ex, :connection, :ack, :error],
+      %{count: 1},
+      state.metadata
+    )
 
     state
   end

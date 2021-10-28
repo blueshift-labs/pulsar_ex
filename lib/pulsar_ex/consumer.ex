@@ -8,7 +8,10 @@ defmodule PulsarEx.Consumer do
       :subscription,
       :brokers,
       :admin_port,
+      :consumer_id,
       :subscription_type,
+      :connection_attempt,
+      :max_connection_attempts,
       :receiving_queue_size,
       :refill_queue_size_watermark,
       :flow_permits_watermark,
@@ -37,15 +40,10 @@ defmodule PulsarEx.Consumer do
       :subscription,
       :brokers,
       :admin_port,
-      :broker,
-      :subscription_type,
-      :priority_level,
-      :read_compacted,
-      :initial_position,
       :consumer_id,
-      :consumer_name,
-      :properties,
-      :connection,
+      :subscription_type,
+      :connection_attempt,
+      :max_connection_attempts,
       :receiving_queue_size,
       :refill_queue_size_watermark,
       :flow_permits_watermark,
@@ -64,7 +62,15 @@ defmodule PulsarEx.Consumer do
       :acks,
       :nacks,
       :consumer_opts,
-      :metadata
+      :metadata,
+      :broker,
+      :priority_level,
+      :read_compacted,
+      :initial_position,
+      :consumer_name,
+      :properties,
+      :connection,
+      :connection_ref
     ]
   end
 
@@ -101,10 +107,30 @@ defmodule PulsarEx.Consumer do
                                    batch_size: 100,
                                    flush_interval: 1_000
                                  )
-      @termination_timeout 1000
+      @max_connection_attempts Keyword.get(opts, :max_connection_attempts, 5)
+      @connection_interval 1000
 
-      def start_link({topic, subscription, consumer_opts}) do
-        GenServer.start_link(__MODULE__, {topic, subscription, consumer_opts})
+      def start_link({topic_name, partition, subscription, consumer_opts}) do
+        GenServer.start_link(__MODULE__, {topic_name, partition, subscription, consumer_opts})
+      end
+
+      @impl true
+      def init({topic_name, nil, subscription, consumer_opts}) do
+        case Topic.parse(topic_name) do
+          {:ok, %Topic{} = topic} -> init({topic, subscription, consumer_opts})
+          err -> {:stop, err}
+        end
+      end
+
+      @impl true
+      def init({topic_name, partition, subscription, consumer_opts}) do
+        case Topic.parse(topic_name) do
+          {:ok, %Topic{} = topic} ->
+            init({%{topic | partition: partition}, subscription, consumer_opts})
+
+          err ->
+            {:stop, err}
+        end
       end
 
       @impl true
@@ -128,6 +154,8 @@ defmodule PulsarEx.Consumer do
 
         brokers = Application.fetch_env!(:pulsar_ex, :brokers)
         admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
+
+        consumer_id = PulsarEx.Application.consumer_id()
 
         subscription_type = Keyword.get(consumer_opts, :subscription_type, @subscription_type)
 
@@ -166,12 +194,16 @@ defmodule PulsarEx.Consumer do
         dead_letter_producer_opts =
           Keyword.get(consumer_opts, :dead_letter_producer_opts, @dead_letter_producer_opts)
 
+        max_connection_attempts =
+          min(Keyword.get(consumer_opts, :max_connection_attempts, @max_connection_attempts), 10)
+
         state = %State{
           state: :connecting,
           topic: topic,
           topic_name: topic_name,
           topic_logical_name: topic_logical_name,
           subscription: subscription,
+          consumer_id: consumer_id,
           brokers: brokers,
           admin_port: admin_port,
           subscription_type: subscription_type,
@@ -187,58 +219,63 @@ defmodule PulsarEx.Consumer do
           redelivery_interval: redelivery_interval,
           dead_letter_producer_opts: dead_letter_producer_opts,
           permits: receiving_queue_size,
+          consumer_opts: consumer_opts,
+          metadata: metadata,
+          max_connection_attempts: max_connection_attempts,
+          connection_attempt: 0,
           queue: :queue.new(),
           queue_size: 0,
           batch: [],
           acks: [],
-          nacks: [],
-          consumer_opts: consumer_opts,
-          metadata: metadata
+          nacks: []
         }
 
         Process.send(self(), :connect, [])
 
+        Process.send(self(), :poll, [])
+        Process.send_after(self(), :acks, state.ack_interval)
+        Process.send_after(self(), :nacks, state.redelivery_interval)
+
         {:ok, state}
-      end
-
-      defp subscribe(pool, topic_name, subscription, subscription_type, consumer_opts) do
-        connection = :poolboy.checkout(pool)
-        :poolboy.checkin(pool, connection)
-
-        Connection.subscribe(
-          connection,
-          topic_name,
-          subscription,
-          subscription_type,
-          consumer_opts
-        )
       end
 
       @impl true
       def handle_info(:connect, %{state: :connecting} = state) do
-        start = System.monotonic_time()
+        if state.connection_ref != nil do
+          Process.demonitor(state.connection_ref)
+        end
+
+        state = %{state | connection_ref: nil}
 
         with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
-             {:ok, pool} <- ConnectionManager.get_connection(broker),
+             {:ok, connection} <- ConnectionManager.get_connection(broker),
              {:ok, reply} <-
-               subscribe(
-                 pool,
+               Connection.subscribe(
+                 connection,
+                 state.consumer_id,
                  state.topic_name,
                  state.subscription,
                  state.subscription_type,
                  state.consumer_opts
+               ),
+             :ok <-
+               send_acks(
+                 connection,
+                 state.consumer_id,
+                 state.acks,
+                 state.topic_name,
+                 state.metadata
                ) do
           %{
             priority_level: priority_level,
             read_compacted: read_compacted,
             initial_position: initial_position,
-            consumer_id: consumer_id,
             consumer_name: consumer_name,
-            properties: properties,
-            connection: connection
+            subscription_type: subscription_type,
+            properties: properties
           } = reply
 
-          Process.monitor(connection)
+          ref = Process.monitor(connection)
 
           metadata =
             properties
@@ -252,16 +289,20 @@ defmodule PulsarEx.Consumer do
               priority_level: priority_level,
               read_compacted: read_compacted,
               initial_position: initial_position,
-              consumer_id: consumer_id,
               consumer_name: consumer_name,
+              subscription_type: subscription_type,
               properties: properties,
               connection: connection,
-              metadata: metadata
+              connection_ref: ref,
+              metadata: metadata,
+              connection_attempt: 0,
+              queue: :queue.new(),
+              queue_size: 0,
+              batch: [],
+              acks: [],
+              nacks: [],
+              permits: state.receiving_queue_size
           }
-
-          Process.send(self(), :poll, [])
-          Process.send_after(self(), :acks, state.ack_interval)
-          Process.send_after(self(), :nacks, state.redelivery_interval)
 
           Logger.debug(
             "Subscribed consumer for topic #{state.topic_name} with subscription #{
@@ -271,7 +312,7 @@ defmodule PulsarEx.Consumer do
 
           :telemetry.execute(
             [:pulsar_ex, :consumer, :connect, :success],
-            %{count: 1, duration: System.monotonic_time() - start},
+            %{count: 1},
             state.metadata
           )
 
@@ -290,7 +331,19 @@ defmodule PulsarEx.Consumer do
               state.metadata
             )
 
-            {:stop, err, state}
+            state = %{state | connection_attempt: state.connection_attempt + 1}
+
+            if state.connection_attempt < state.max_connection_attempts do
+              Process.send_after(
+                self(),
+                :connect,
+                @connection_interval * state.connection_attempt
+              )
+
+              {:noreply, state}
+            else
+              {:stop, err, state}
+            end
         end
       end
 
@@ -302,51 +355,78 @@ defmodule PulsarEx.Consumer do
       end
 
       @impl true
-      def handle_info(:acks, %{acks: []} = state) do
+      def handle_info(:acks, %{state: :connecting} = state) do
         Process.send_after(self(), :acks, state.ack_interval)
         {:noreply, state}
       end
 
       @impl true
       def handle_info(:acks, %{acks: acks} = state) do
-        case Connection.ack(
+        case send_acks(
                state.connection,
                state.consumer_id,
+               acks,
+               state.topic_name,
+               state.metadata
+             ) do
+          :ok ->
+            Process.send_after(self(), :acks, state.ack_interval)
+            {:noreply, %{state | acks: []}}
+
+          err ->
+            {:stop, err, state}
+        end
+      end
+
+      defp send_acks(_, _, [], _, _), do: :ok
+
+      defp send_acks(connection, consumer_id, acks, topic_name, metadata) do
+        start = System.monotonic_time(:millisecond)
+
+        case Connection.ack(
+               connection,
+               consumer_id,
                :individual,
                acks
              ) do
           :ok ->
             Logger.debug(
-              "Sent #{length(acks)} acks from consumer #{state.consumer_id} for topic #{
-                state.topic_name
-              }"
+              "Sent #{length(acks)} acks from consumer #{consumer_id} for topic #{topic_name}"
             )
 
             :telemetry.execute(
               [:pulsar_ex, :consumer, :ack, :success],
-              %{count: 1, acks: length(acks)},
-              state.metadata
+              %{
+                count: 1,
+                acks: length(acks),
+                duration: System.monotonic_time(:millisecond) - start
+              },
+              metadata
             )
 
-            Process.send_after(self(), :acks, state.ack_interval)
-
-            {:noreply, %{state | acks: []}}
+            :ok
 
           {:error, err} ->
             Logger.error(
-              "Error sending #{length(acks)} acks from consumer #{state.consumer_id} for topic #{
-                state.topic_name
+              "Error sending #{length(acks)} acks from consumer #{consumer_id} for topic #{
+                topic_name
               }, #{inspect(err)}"
             )
 
             :telemetry.execute(
               [:pulsar_ex, :consumer, :ack, :error],
               %{count: 1, acks: length(acks)},
-              state.metadata
+              metadata
             )
 
-            {:stop, {:error, err}, state}
+            {:error, err}
         end
+      end
+
+      @impl true
+      def handle_info(:nacks, %{state: :connecting} = state) do
+        Process.send_after(self(), :acks, state.redelivery_interval)
+        {:noreply, state}
       end
 
       @impl true
@@ -357,6 +437,8 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:nacks, %{nacks: nacks} = state) do
+        start = System.monotonic_time(:millisecond)
+
         {resend_messages, nacks} =
           Enum.split_with(nacks, fn {_, resend_ts} -> Timex.after?(Timex.now(), resend_ts) end)
 
@@ -373,7 +455,11 @@ defmodule PulsarEx.Consumer do
 
               :telemetry.execute(
                 [:pulsar_ex, :consumer, :nacks, :success],
-                %{count: 1, nacks: length(message_ids)},
+                %{
+                  count: 1,
+                  nacks: length(message_ids),
+                  duration: System.monotonic_time(:millisecond) - start
+                },
                 state.metadata
               )
 
@@ -399,6 +485,12 @@ defmodule PulsarEx.Consumer do
           Process.send_after(self(), :nacks, state.redelivery_interval)
           {:noreply, state}
         end
+      end
+
+      @impl true
+      def handle_info(:poll, %{state: :connecting} = state) do
+        Process.send_after(self(), :poll, state.poll_interval)
+        {:noreply, state}
       end
 
       @impl true
@@ -439,17 +531,6 @@ defmodule PulsarEx.Consumer do
               )
 
               Enum.map(batch, fn _ -> {:error, err} end)
-          catch
-            :exit, reason ->
-              Logger.error(Exception.format(:error, reason, __STACKTRACE__))
-
-              Logger.error(
-                "Error handling batch of #{length(batch)} messages from consumer #{
-                  state.consumer_id
-                } for topic #{state.topic_name}, #{inspect(reason)}"
-              )
-
-              Enum.map(batch, fn _ -> {:error, reason} end)
           end
 
         {acks, nacks} =
@@ -529,6 +610,7 @@ defmodule PulsarEx.Consumer do
       end
 
       defp handle_flow_permits(state) do
+        start = System.monotonic_time(:millisecond)
         permits = min(state.receiving_queue_size - state.queue_size, state.permits)
 
         case Connection.flow_permits(state.connection, state.consumer_id, permits) do
@@ -541,7 +623,11 @@ defmodule PulsarEx.Consumer do
 
             :telemetry.execute(
               [:pulsar_ex, :consumer, :flow_permits, :success],
-              %{count: 1, permits: permits},
+              %{
+                count: 1,
+                permits: permits,
+                duration: System.monotonic_time(:millisecond) - start
+              },
               state.metadata
             )
 
@@ -637,7 +723,7 @@ defmodule PulsarEx.Consumer do
             message_opts =
               Map.take(message, [:properties, :partition_key, :ordering_key, :event_time])
 
-            PulsarEx.sync_produce(
+            PulsarEx.produce(
               state.dead_letter_topic,
               message.payload,
               message_opts,
@@ -673,7 +759,14 @@ defmodule PulsarEx.Consumer do
       def handle_cast(:close, state) do
         Logger.warn("Received close command from connection for topic #{state.topic_name}")
 
-        {:stop, {:shutdown, :closed}, state}
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :close],
+          %{count: 1},
+          state.metadata
+        )
+
+        Process.send_after(self(), :connect, @connection_interval)
+        {:noreply, %{state|state: :connecting}}
       end
 
       @impl true
@@ -693,22 +786,6 @@ defmodule PulsarEx.Consumer do
           )
         end
 
-        if length(state.nacks) > 0 do
-          Logger.warn(
-            "Stopping consumer while #{length(state.nacks)} nacks are still left in consumer #{
-              state.consumer_id
-            } for topic #{state.topic_name}"
-          )
-        end
-
-        if state.queue_size > 0 do
-          Logger.warn(
-            "Stopping consumer while #{state.queue_size} messages are still left in consumer #{
-              state.consumer_id
-            } for topic #{state.topic_name}"
-          )
-        end
-
         case reason do
           :shutdown ->
             Logger.debug(
@@ -716,7 +793,7 @@ defmodule PulsarEx.Consumer do
                 inspect(reason)
               }"
             )
-
+            Connection.stop_consumer(state.connection, state.consumer_id)
             state
 
           :normal ->
@@ -725,23 +802,7 @@ defmodule PulsarEx.Consumer do
                 inspect(reason)
               }"
             )
-
-            state
-
-          {:shutdown, :closed} ->
-            Logger.debug(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
-                inspect(reason)
-              }"
-            )
-
-            :telemetry.execute(
-              [:pulsar_ex, :consumer, :closed],
-              %{count: 1},
-              state.metadata
-            )
-
-            Process.sleep(@termination_timeout)
+            Connection.stop_consumer(state.connection, state.consumer_id)
             state
 
           {:shutdown, _} ->
@@ -750,7 +811,7 @@ defmodule PulsarEx.Consumer do
                 inspect(reason)
               }"
             )
-
+            Connection.stop_consumer(state.connection, state.consumer_id)
             state
 
           _ ->

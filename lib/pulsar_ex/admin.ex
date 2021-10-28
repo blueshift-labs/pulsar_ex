@@ -1,7 +1,7 @@
 defmodule PulsarEx.Admin do
   alias PulsarEx.{Broker, Topic}
 
-  def lookup_topic_partitions(hosts, admin_port, %Topic{partition: nil} = topic)
+  def lookup_topic_partitions(hosts, admin_port, %Topic{} = topic)
       when is_list(hosts) do
     hosts
     |> Enum.shuffle()
@@ -13,7 +13,7 @@ defmodule PulsarEx.Admin do
     end)
   end
 
-  def lookup_topic_partitions(host, admin_port, %Topic{partition: nil} = topic)
+  def lookup_topic_partitions(host, admin_port, %Topic{} = topic)
       when is_binary(host) do
     url = %URI{
       scheme: "http",
