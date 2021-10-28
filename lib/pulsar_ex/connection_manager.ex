@@ -11,15 +11,18 @@ defmodule PulsarEx.ConnectionManager do
 
   require Logger
 
-  @num_connections 3
+  @num_connections 1
 
   def get_connection(%Broker{} = broker) do
     with [] <- Registry.lookup(ConnectionRegistry, broker),
-         :ok <- GenServer.call(__MODULE__, {:create, broker}) do
-      get_connection(broker)
+         {:ok, pool} <- GenServer.call(__MODULE__, {:create, broker}) do
+      {:ok, pool}
     else
-      [{pool, _}] -> {:ok, pool}
-      err -> err
+      [{pool, _}] ->
+        {:ok, :poolboy.transaction(pool, & &1)}
+
+      err ->
+        err
     end
   end
 
@@ -40,29 +43,35 @@ defmodule PulsarEx.ConnectionManager do
   @impl true
   def handle_call({:create, %Broker{} = broker}, _from, state) do
     case start_connection(broker) do
-      :ok -> {:reply, :ok, state}
+      {:ok, pool} -> {:reply, {:ok, pool}, state}
       err -> {:reply, err, state}
     end
   end
 
   defp start_connection(%Broker{} = broker) do
-    Logger.debug("Starting connection for broker #{Broker.to_name(broker)}")
+    case Registry.lookup(ConnectionRegistry, broker) do
+      [{pool, _}] ->
+        {:ok, :poolboy.transaction(pool, & &1)}
 
-    case DynamicSupervisor.start_child(Connections, pool_spec(broker)) do
-      {:error, {:already_started, _}} ->
-        Logger.debug("Connections already started for broker #{Broker.to_name(broker)}")
-        :ok
+      [] ->
+        Logger.debug("Starting connection for broker #{Broker.to_name(broker)}")
 
-      {:ok, _} ->
-        Logger.debug("Connections started for broker #{Broker.to_name(broker)}")
-        :ok
+        case DynamicSupervisor.start_child(Connections, pool_spec(broker)) do
+          {:error, {:already_started, pool}} ->
+            Logger.debug("Connections already started for broker #{Broker.to_name(broker)}")
+            {:ok, pool}
 
-      {:error, err} ->
-        Logger.error(
-          "Error starting connection for broker #{Broker.to_name(broker)}, #{inspect(err)}"
-        )
+          {:ok, pool} ->
+            Logger.debug("Connections started for broker #{Broker.to_name(broker)}")
+            {:ok, pool}
 
-        {:error, err}
+          {:error, err} ->
+            Logger.error(
+              "Error starting connection for broker #{Broker.to_name(broker)}, #{inspect(err)}"
+            )
+
+            {:error, err}
+        end
     end
   end
 

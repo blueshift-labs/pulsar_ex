@@ -1,145 +1,41 @@
 defmodule PulsarEx do
   alias PulsarEx.{
-    ProducerRegistry,
-    ProducerSupervisor,
     ProducerManager,
+    PartitionManager,
     PartitionedProducer,
+    Partitioner,
     Topic,
-    Partitioner
+    ConsumerManager
   }
 
-  @max_attempts 5
+  def produce(topic_name, payload, message_opts \\ [], producer_opts \\ [])
 
-  def sync_produce(topic_name, payload, message_opts \\ [], producer_opts \\ []) do
-    start = System.monotonic_time()
-
-    reply = retry_produce(true, topic_name, payload, message_opts, producer_opts)
-
-    case reply do
-      {:ok, _} ->
-        :telemetry.execute(
-          [:pulsar_ex, :sync_produce, :success],
-          %{count: 1, duration: System.monotonic_time() - start},
-          %{topic: topic_name}
-        )
-
-      _ ->
-        :telemetry.execute(
-          [:pulsar_ex, :sync_produce, :error],
-          %{count: 1, duration: System.monotonic_time() - start},
-          %{topic: topic_name}
-        )
-    end
-
-    reply
+  def produce(topic_name, payload, message_opts, producer_opts)
+      when is_map(message_opts) or is_map(producer_opts) do
+    produce(topic_name, payload, Enum.into(message_opts, []), Enum.into(producer_opts, []))
   end
 
-  def async_produce(topic_name, payload, message_opts \\ [], producer_opts \\ []) do
-    start = System.monotonic_time()
+  def produce(topic_name, payload, message_opts, producer_opts) do
+    with {:ok, {%Topic{partition: nil}, partitions}} <- PartitionManager.lookup(topic_name) do
+      partition =
+        message_opts
+        |> Keyword.get(:partition_key)
+        |> Partitioner.assign(partitions)
 
-    reply = retry_produce(false, topic_name, payload, message_opts, producer_opts)
-
-    case reply do
-      :ok ->
-        :telemetry.execute(
-          [:pulsar_ex, :async_produce, :success],
-          %{count: 1, duration: System.monotonic_time() - start},
-          %{topic: topic_name}
-        )
-
-      _ ->
-        :telemetry.execute(
-          [:pulsar_ex, :async_produce, :error],
-          %{count: 1, duration: System.monotonic_time() - start},
-          %{topic: topic_name}
-        )
-    end
-
-    reply
-  end
-
-  # in the event of topic rebalancing, producer will take time to reconnect
-  defp retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts \\ 1) do
-    :telemetry.execute(
-      [:pulsar_ex, :produce],
-      %{attempts: attempts},
-      %{topic: topic_name}
-    )
-
-    case produce(sync?, topic_name, payload, message_opts, producer_opts) do
-      :ok ->
-        :ok
-
-      {:ok, message_id} ->
-        {:ok, message_id}
-
-      {:error, :producer_not_ready} ->
-        :telemetry.execute(
-          [:pulsar_ex, :produce, :producer_not_ready],
-          %{count: 1},
-          %{topic: topic_name}
-        )
-
-        if attempts >= @max_attempts do
-          {:error, :producer_not_ready}
-        else
-          Process.sleep(500)
-          retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts + 1)
-        end
-
-      {:error, :closed} ->
-        :telemetry.execute(
-          [:pulsar_ex, :produce, :closed],
-          %{count: 1},
-          %{topic: topic_name}
-        )
-
-        if attempts >= @max_attempts do
-          {:error, :closed}
-        else
-          Process.sleep(1000)
-          retry_produce(sync?, topic_name, payload, message_opts, producer_opts, attempts + 1)
-        end
-
-      reply ->
-        reply
+      with {:ok, producer} <- ProducerManager.get_producer(topic_name, partition, producer_opts) do
+        PartitionedProducer.produce(producer, payload, message_opts)
+      end
+    else
+      {:ok, {%Topic{}, _}} -> {:error, :partitioned_topic}
+      err -> err
     end
   end
 
-  defp produce(sync?, topic_name, payload, message_opts, producer_opts)
-       when is_map(message_opts) or is_map(producer_opts) do
-    produce(sync?, topic_name, payload, Enum.into(message_opts, []), Enum.into(producer_opts, []))
-  end
+  defdelegate start_consumer(topic_name, subscription, module, opts), to: ConsumerManager
 
-  defp produce(sync?, topic_name, payload, message_opts, producer_opts) do
-    case ProducerSupervisor.lookup_partitions(topic_name) do
-      [] ->
-        case ProducerManager.create(topic_name, producer_opts) do
-          :ok ->
-            produce(sync?, topic_name, payload, message_opts, producer_opts)
+  defdelegate start_consumer(topic_name, partitions, subscription, module, opts),
+    to: ConsumerManager
 
-          {:error, :already_started} ->
-            produce(sync?, topic_name, payload, message_opts, producer_opts)
-
-          {:error, _} = err ->
-            err
-        end
-
-      [{_, {%Topic{partition: nil} = topic, partitions}}] ->
-        partition_key = Keyword.get(message_opts, :partition_key)
-        partition = Partitioner.assign(partition_key, partitions)
-
-        case Registry.lookup(ProducerRegistry, %{topic | partition: partition}) do
-          [] ->
-            {:error, :producer_not_ready}
-
-          [{pool, _}] ->
-            # we are just using the pool to do round robin, producing message doesn't have to block the pool
-            producer = :poolboy.checkout(pool)
-            :poolboy.checkin(pool, producer)
-
-            PartitionedProducer.produce(sync?, producer, payload, message_opts)
-        end
-    end
-  end
+  defdelegate stop_consumer(topic_name, subscription), to: ConsumerManager
+  defdelegate stop_consumer(topic_name, partitions, subscription), to: ConsumerManager
 end

@@ -3,103 +3,153 @@ defmodule PulsarEx.ConsumerManager do
 
   require Logger
 
-  alias PulsarEx.{Consumers, PartitionedConsumerSupervisor}
+  alias PulsarEx.{Consumers, ConsumerRegistry, PartitionManager, Topic}
 
-  @timeout 180_000
+  @num_consumers 1
+  @refresh_interval 60_000
 
-  def create({topic_name, subscription, module, opts}) do
-    create(topic_name, subscription, module, opts)
+  def start_consumer(topic_name, subscription, module, opts) do
+    GenServer.call(__MODULE__, {:start, topic_name, subscription, module, opts})
   end
 
-  def create(topic_name, subscription, module, opts) do
-    GenServer.call(__MODULE__, {:create, topic_name, subscription, module, opts}, @timeout)
+  def start_consumer(topic_name, partitions, subscription, module, opts) do
+    GenServer.call(__MODULE__, {:start, topic_name, partitions, subscription, module, opts})
   end
 
-  def start_link({lookup, auto_start}) do
-    GenServer.start_link(__MODULE__, {lookup, auto_start}, name: __MODULE__)
+  def stop_consumer(topic_name, subscription) do
+    GenServer.call(__MODULE__, {:stop, topic_name, subscription})
+  end
+
+  def stop_consumer(topic_name, partitions, subscription) do
+    GenServer.call(__MODULE__, {:stop, topic_name, partitions, subscription})
+  end
+
+  def start_link(auto_start) do
+    GenServer.start_link(__MODULE__, auto_start, name: __MODULE__)
   end
 
   @impl true
-  def init({lookup, false}) do
+  def init(false) do
     Logger.debug("Starting consumer manager")
-
-    {:ok, %{consumers: %{}, lookup: lookup}}
+    {:ok, %{}}
   end
 
   @impl true
-  def init({lookup, true}) do
+  def init(true) do
     Logger.debug("Starting consumer manager")
 
-    {err, consumers} =
-      Application.get_env(:pulsar_ex, :consumers, [])
-      |> Enum.reduce_while({nil, %{}}, fn opts, {nil, started} ->
-        topic_name = Keyword.fetch!(opts, :topic)
-        subscription = Keyword.fetch!(opts, :subscription)
-        module = Keyword.fetch!(opts, :module)
-        consumer_opts = consumer_opts(opts)
+    Application.get_env(:pulsar_ex, :consumers, [])
+    |> Enum.reduce_while({:ok, %{}}, fn opts, {:ok, refs} ->
+      topic_name = Keyword.fetch!(opts, :topic)
+      partitions = Keyword.get(opts, :partitions, nil)
+      subscription = Keyword.fetch!(opts, :subscription)
+      module = Keyword.fetch!(opts, :module)
+      consumer_opts = consumer_opts(opts)
+      refresh_interval = Keyword.get(consumer_opts, :refresh_interval, @refresh_interval)
+      auto_refresh = Keyword.get(consumer_opts, :auto_refresh, true)
 
-        case start_consumer(topic_name, subscription, module, consumer_opts, lookup) do
-          :ok ->
-            {:cont, {nil, Map.put(started, {topic_name, subscription}, {module, consumer_opts})}}
+      case do_start_consumers(topic_name, partitions, subscription, module, consumer_opts) do
+        nil ->
+          if partitions == nil && auto_refresh do
+            ref =
+              Process.send_after(
+                self(),
+                {:refresh, topic_name, subscription, module, opts},
+                refresh_interval + :rand.uniform(refresh_interval)
+              )
 
-          {:error, _} = err ->
-            {:halt, {err, started}}
-        end
-      end)
+            {:cont, {:ok, Map.put(refs, {topic_name, subscription}, ref)}}
+          else
+            {:cont, {:ok, refs}}
+          end
 
-    case err do
-      nil -> {:ok, %{consumers: consumers, lookup: lookup}}
-      _ -> {:stop, err}
+        err ->
+          {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, state} -> {:ok, state}
+      err -> {:stop, err}
     end
   end
 
   @impl true
   def handle_call(
-        {:create, topic_name, subscription, module, opts},
+        {:start, topic_name, subscription, module, opts},
         _from,
-        %{consumers: consumers, lookup: lookup} = state
+        state
       ) do
-    cond do
-      Map.has_key?(consumers, {topic_name, subscription}) ->
-        {:reply, {:error, :already_started}, state}
+    consumer_opts = consumer_opts(opts)
+    auto_refresh = Keyword.get(consumer_opts, :auto_refresh, true)
+    refresh_interval = Keyword.get(consumer_opts, :refresh_interval, @refresh_interval)
 
-      true ->
-        consumer_opts = consumer_opts(opts)
+    case do_start_consumers(topic_name, nil, subscription, module, consumer_opts) do
+      nil ->
+        if auto_refresh do
+          ref =
+            Process.send_after(
+              self(),
+              {:refresh, topic_name, subscription, module, opts},
+              refresh_interval + :rand.uniform(refresh_interval)
+            )
 
-        case start_consumer(topic_name, subscription, module, consumer_opts, lookup) do
-          :ok ->
-            consumers = Map.put(consumers, {topic_name, subscription}, {module, consumer_opts})
-            {:reply, :ok, %{state | consumers: consumers}}
-
-          {:error, _} = err ->
-            {:reply, err, state}
+          {:reply, :ok, Map.put(state, {topic_name, subscription}, ref)}
+        else
+          {:reply, :ok, state}
         end
+
+      {:error, _} = err ->
+        {:reply, err, state}
     end
   end
 
-  defp start_consumer(topic_name, subscription, module, consumer_opts, lookup) do
-    Logger.debug("Starting consumer for topic #{topic_name} with subscription #{subscription}")
+  @impl true
+  def handle_call(
+        {:start, topic_name, partitions, subscription, module, opts},
+        _from,
+        state
+      ) do
+    case do_start_consumers(topic_name, partitions, subscription, module, consumer_opts(opts)) do
+      nil ->
+        {:reply, :ok, state}
 
-    started =
-      DynamicSupervisor.start_child(
-        Consumers,
-        {PartitionedConsumerSupervisor, {topic_name, subscription, module, consumer_opts, lookup}}
+      {:error, _} = err ->
+        {:reply, err, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:stop, topic_name, partitions, subscription}, _from, state) do
+    do_stop_consumers(topic_name, partitions, subscription)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:stop, topic_name, subscription}, _from, state) do
+    {ref, state} = Map.pop(state, {topic_name, subscription})
+
+    if ref != nil do
+      Process.cancel_timer(ref)
+    end
+
+    do_stop_consumers(topic_name, nil, subscription)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info({:refresh, topic_name, subscription, module, opts}, state) do
+    consumer_opts = consumer_opts(opts)
+    refresh_interval = Keyword.get(consumer_opts, :refresh_interval, @refresh_interval)
+    do_start_consumers(topic_name, nil, subscription, module, consumer_opts)
+
+    ref =
+      Process.send_after(
+        self(),
+        {:refresh, topic_name, subscription, module, opts},
+        refresh_interval + :rand.uniform(refresh_interval)
       )
 
-    case started do
-      {:ok, _} ->
-        Logger.debug("Started consumer for topic #{topic_name} with subscription #{subscription}")
-        :ok
-
-      {:error, err} ->
-        Logger.error(
-          "Error starting consumer for topic #{topic_name} with subscription #{subscription}, #{
-            inspect(err)
-          }"
-        )
-
-        {:error, err}
-    end
+    {:noreply, Map.put(state, {topic_name, subscription}, ref)}
   end
 
   defp consumer_opts(opts) do
@@ -111,5 +161,112 @@ defmodule PulsarEx.ConsumerManager do
         _, _, v -> v
       end
     )
+  end
+
+  defp consumer_spec(topic_name, partition, subscription, module, consumer_opts) do
+    consumers = Keyword.get(consumer_opts, :num_consumers, @num_consumers)
+
+    children =
+      for n <- 0..(consumers - 1) do
+        Supervisor.child_spec({module, {topic_name, partition, subscription, consumer_opts}},
+          id: {module, n}
+        )
+      end
+
+    %{
+      id: {topic_name, partition, subscription},
+      start: {
+        Supervisor,
+        :start_link,
+        [
+          children,
+          [
+            strategy: :one_for_one,
+            name: {:via, Registry, {ConsumerRegistry, {topic_name, partition, subscription}}}
+          ]
+        ]
+      },
+      restart: :permanent,
+      shutdown: :infinity,
+      type: :supervisor,
+      modules: [module]
+    }
+  end
+
+  defp do_start_consumer(topic_name, partition, subscription, module, consumer_opts) do
+    Logger.debug(
+      "Starting consumer for topic #{topic_name}, partition #{partition} with subscription #{
+        subscription
+      }"
+    )
+
+    DynamicSupervisor.start_child(
+      Consumers,
+      consumer_spec(topic_name, partition, subscription, module, consumer_opts)
+    )
+    |> case do
+      {:ok, _} ->
+        Logger.debug(
+          "Started consumer for topic #{topic_name}, partition #{partition} with subscription #{
+            subscription
+          }"
+        )
+
+        nil
+
+      {:error, {:already_started, _}} ->
+        nil
+
+      {:error, err} ->
+        Logger.error(
+          "Error starting consumer for topic #{topic_name}, partition #{partition} with subscription #{
+            subscription
+          }, #{inspect(err)}"
+        )
+
+        {:error, err}
+    end
+  end
+
+  defp do_start_consumers(topic_name, nil, subscription, module, consumer_opts) do
+    with {:ok, {%Topic{}, partitions}} <- PartitionManager.lookup(topic_name) do
+      partitions = if partitions > 0, do: 0..(partitions - 1), else: [nil]
+      do_start_consumers(topic_name, partitions, subscription, module, consumer_opts)
+    else
+      err ->
+        Logger.error("Error looking up topic partitions for topic #{topic_name}, #{inspect(err)}")
+        err
+    end
+  end
+
+  defp do_start_consumers(topic_name, partitions, subscription, module, consumer_opts) do
+    partitions
+    |> Enum.reduce(nil, fn partition, err ->
+      err || do_start_consumer(topic_name, partition, subscription, module, consumer_opts)
+    end)
+  end
+
+  defp do_stop_consumer(topic_name, partition, subscription) do
+    case Registry.lookup(ConsumerRegistry, {topic_name, partition, subscription}) do
+      [] -> :ok
+      [{consumer, _}] -> DynamicSupervisor.terminate_child(Consumers, consumer)
+    end
+  end
+
+  defp do_stop_consumers(topic_name, nil, subscription) do
+    with {:ok, {%Topic{}, partitions}} <- PartitionManager.lookup(topic_name) do
+      partitions = if partitions > 0, do: 0..(partitions - 1), else: [nil]
+      do_stop_consumers(topic_name, partitions, subscription)
+    else
+      err ->
+        Logger.error("Error looking up topic partitions for topic #{topic_name}, #{inspect(err)}")
+    end
+  end
+
+  defp do_stop_consumers(topic_name, partitions, subscription) do
+    partitions
+    |> Enum.each(fn partition ->
+      do_stop_consumer(topic_name, partition, subscription)
+    end)
   end
 end
