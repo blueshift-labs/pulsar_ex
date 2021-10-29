@@ -100,12 +100,12 @@ defmodule PulsarEx.Consumer do
       @max_redelivery_attempts Keyword.get(opts, :max_redelivery_attempts, 3)
       @dead_letter_topic Keyword.get(opts, :dead_letter_topic, nil)
       @poll_interval Keyword.get(opts, :poll_interval, 50)
-      @ack_interval Keyword.get(opts, :ack_interval, 5_000)
-      @redelivery_interval Keyword.get(opts, :redelivery_interval, 1_000)
+      @ack_interval Keyword.get(opts, :ack_interval, 1000)
+      @redelivery_interval Keyword.get(opts, :redelivery_interval, 1000)
       @dead_letter_producer_opts Keyword.get(opts, :dead_letter_producer_opts,
                                    batch_enabled: true,
                                    batch_size: 100,
-                                   flush_interval: 1_000
+                                   flush_interval: 1000
                                  )
       @max_connection_attempts Keyword.get(opts, :max_connection_attempts, 5)
       @connection_interval 1000

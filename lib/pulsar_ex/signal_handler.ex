@@ -3,7 +3,7 @@ defmodule PulsarEx.SignalHandler do
 
   require Logger
 
-  @shutdown_timeout 1000
+  @shutdown_timeout 5000
 
   def start_link() do
     timeout = Application.get_env(:pulsar_ex, :shutdown_timeout, @shutdown_timeout)

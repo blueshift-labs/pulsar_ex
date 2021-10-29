@@ -65,8 +65,6 @@ defmodule PulsarEx.ProducerManager do
   end
 
   defp start_producer(topic_name, partition, producer_opts) do
-    Logger.debug("Starting producer for topic #{topic_name}, partition #{partition}")
-
     started =
       DynamicSupervisor.start_child(
         Producers,
