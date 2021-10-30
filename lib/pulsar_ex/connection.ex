@@ -863,7 +863,7 @@ defmodule PulsarEx.Connection do
 
     duration = System.monotonic_time(:millisecond) - ts
 
-    Logger.debug(
+    Logger.info(
       "Received Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, after #{
         duration
       }ms"
