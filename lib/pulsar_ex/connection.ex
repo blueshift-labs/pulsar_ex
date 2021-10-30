@@ -51,7 +51,6 @@ defmodule PulsarEx.Connection do
     CommandFlow,
     CommandAck,
     CommandRedeliverUnacknowledgedMessages,
-    CommandAckResponse,
     CommandMessage
   }
 
@@ -490,15 +489,14 @@ defmodule PulsarEx.Connection do
   end
 
   @impl true
-  def handle_call({:ack, consumer_id, ack_type, msg_ids}, from, state)
+  def handle_call({:ack, consumer_id, ack_type, msg_ids}, _from, state)
       when is_list(msg_ids) do
     Logger.debug(
       "Sending #{length(msg_ids)} acks to broker #{state.broker_name} for consumer #{consumer_id}"
     )
 
-    request =
+    command =
       CommandAck.new(
-        request_id: state.request_id,
         consumer_id: consumer_id,
         ack_type: ack_type(ack_type),
         message_id: msg_ids,
@@ -506,18 +504,15 @@ defmodule PulsarEx.Connection do
         txnid_most_bits: nil
       )
 
-    state = %{state | request_id: state.request_id + 1}
-
-    case :gen_tcp.send(state.socket, encode_command(request)) do
+    case :gen_tcp.send(state.socket, encode_command(command)) do
       :ok ->
-        requests =
-          Map.put(
-            state.requests,
-            {:request_id, request.request_id},
-            {from, System.monotonic_time(:millisecond), request}
-          )
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :ack, :success],
+          %{count: 1},
+          state.metadata
+        )
 
-        {:noreply, %{state | requests: requests}}
+        {:reply, :ok, state}
 
       {:error, _} = err ->
         :telemetry.execute(
@@ -898,52 +893,6 @@ defmodule PulsarEx.Connection do
 
     :telemetry.execute(
       [:pulsar_ex, :connection, :send, :error],
-      %{count: 1},
-      state.metadata
-    )
-
-    state
-  end
-
-  defp handle_command(%CommandAckResponse{request_id: request_id, error: nil}, _, state) do
-    {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
-    state = %{state | requests: requests}
-
-    duration = System.monotonic_time(:millisecond) - ts
-
-    Logger.debug(
-      "Received Ack Response from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
-        inspect(duration)
-      }ms"
-    )
-
-    GenServer.reply(from, :ok)
-
-    :telemetry.execute(
-      [:pulsar_ex, :connection, :ack, :success],
-      %{count: 1, duration: duration},
-      state.metadata
-    )
-
-    state
-  end
-
-  defp handle_command(%CommandAckResponse{request_id: request_id, error: err}, _, state) do
-    {{from, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
-    state = %{state | requests: requests}
-
-    duration = System.monotonic_time(:millisecond) - ts
-
-    Logger.error(
-      "Received Ack Error from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
-        inspect(err)
-      }, after #{duration}ms"
-    )
-
-    GenServer.reply(from, {:error, err})
-
-    :telemetry.execute(
-      [:pulsar_ex, :connection, :ack, :error],
       %{count: 1},
       state.metadata
     )
