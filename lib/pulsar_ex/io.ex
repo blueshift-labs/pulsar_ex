@@ -7,18 +7,22 @@ defmodule PulsarEx.IO do
 
   def ack_type(:individual), do: :Individual
   def ack_type(:cumulative), do: :Cumulative
+  def ack_type(type), do: type
 
   def subscription_type(:exclusive), do: :Exclusive
   def subscription_type(:shared), do: :Shared
   def subscription_type(:failover), do: :Failover
   def subscription_type(:key_shared), do: :Key_Shared
+  def subscription_type(type), do: type
 
   def initial_position(:latest), do: :Latest
   def initial_position(:earliest), do: :Earliest
+  def initial_position(pos), do: pos
 
   def producer_access_mode(:shared), do: :Shared
   def producer_access_mode(:exclusive), do: :Exclusive
   def producer_access_mode(:wait_for_exclusive), do: :WaitForExclusive
+  def producer_access_mode(mode), do: mode
 
   # [total_size][command_size][command]
   def encode_command(%Proto.BaseCommand{} = command) do
