@@ -76,12 +76,12 @@ defmodule PulsarEx.Connection do
     GenServer.call(conn, {:stop_consumer, consumer_id})
   end
 
-  def send_message(conn, producer_id, sequence_id, %ProducerMessage{} = message) do
-    GenServer.call(conn, {:send, producer_id, sequence_id, message})
+  def send_message(conn, producer_id, sequence_id, %ProducerMessage{} = message, timeout) do
+    GenServer.call(conn, {:send, producer_id, sequence_id, message}, timeout)
   end
 
-  def send_messages(conn, producer_id, sequence_id, messages) when is_list(messages) do
-    GenServer.call(conn, {:send, producer_id, sequence_id, messages})
+  def send_messages(conn, producer_id, sequence_id, messages, timeout) when is_list(messages) do
+    GenServer.call(conn, {:send, producer_id, sequence_id, messages}, timeout)
   end
 
   def flow_permits(conn, consumer_id, permits) do

@@ -59,9 +59,10 @@ defmodule PulsarEx.PartitionedProducer do
   @flush_interval 1000
   @connection_interval 1000
   @max_connection_attempts 5
+  @send_timeout 30_000
 
   def produce(pid, payload, message_opts) do
-    GenServer.call(pid, {:produce, payload, message_opts})
+    GenServer.call(pid, {:produce, payload, message_opts}, @send_timeout)
   end
 
   def start_link({topic_name, partition, producer_opts}) do
@@ -275,7 +276,15 @@ defmodule PulsarEx.PartitionedProducer do
     start = System.monotonic_time(:millisecond)
 
     {%{sequence_id: sequence_id} = message, state} = create_message(payload, message_opts, state)
-    reply = Connection.send_message(state.connection, state.producer_id, sequence_id, message)
+
+    reply =
+      Connection.send_message(
+        state.connection,
+        state.producer_id,
+        sequence_id,
+        message,
+        @send_timeout
+      )
 
     case reply do
       {:ok, _} ->
@@ -403,7 +412,14 @@ defmodule PulsarEx.PartitionedProducer do
       [{%{sequence_id: sequence_id} = message, from}] ->
         start = System.monotonic_time(:millisecond)
 
-        reply = Connection.send_message(state.connection, state.producer_id, sequence_id, message)
+        reply =
+          Connection.send_message(
+            state.connection,
+            state.producer_id,
+            sequence_id,
+            message,
+            @send_timeout
+          )
 
         case reply do
           {:ok, _} ->
@@ -431,7 +447,13 @@ defmodule PulsarEx.PartitionedProducer do
         start = System.monotonic_time(:millisecond)
 
         reply =
-          Connection.send_messages(state.connection, state.producer_id, sequence_id, messages)
+          Connection.send_messages(
+            state.connection,
+            state.producer_id,
+            sequence_id,
+            messages,
+            @send_timeout
+          )
 
         case reply do
           {:ok, _} ->
