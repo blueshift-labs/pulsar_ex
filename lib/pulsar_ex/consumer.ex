@@ -495,16 +495,23 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:poll, state) do
-        case :queue.out(state.queue) do
-          {:empty, _} ->
-            handle_empty(state)
+        # In the event of shutting down, we will stop processing any the messages in queue/batch, thus generating no more acks/nacks.
+        # Acks will continue being sent to broker as well as flow permits and nacks.
+        # However, no more messages will be processed anymore.
+        if PulsarEx.Application.shutdown?() do
+          {:noreply, state}
+        else
+          case :queue.out(state.queue) do
+            {:empty, _} ->
+              handle_empty(state)
 
-          {{:value, batch}, queue} ->
-            handle_batch(batch, %{
-              state
-              | queue: queue,
-                queue_size: state.queue_size - state.batch_size
-            })
+            {{:value, batch}, queue} ->
+              handle_batch(batch, %{
+                state
+                | queue: queue,
+                  queue_size: state.queue_size - state.batch_size
+              })
+          end
         end
       end
 
@@ -766,7 +773,7 @@ defmodule PulsarEx.Consumer do
         )
 
         Process.send_after(self(), :connect, @connection_interval)
-        {:noreply, %{state|state: :connecting}}
+        {:noreply, %{state | state: :connecting}}
       end
 
       @impl true
@@ -793,6 +800,7 @@ defmodule PulsarEx.Consumer do
                 inspect(reason)
               }"
             )
+
             Connection.stop_consumer(state.connection, state.consumer_id)
             state
 
@@ -802,6 +810,7 @@ defmodule PulsarEx.Consumer do
                 inspect(reason)
               }"
             )
+
             Connection.stop_consumer(state.connection, state.consumer_id)
             state
 
@@ -811,6 +820,7 @@ defmodule PulsarEx.Consumer do
                 inspect(reason)
               }"
             )
+
             Connection.stop_consumer(state.connection, state.consumer_id)
             state
 

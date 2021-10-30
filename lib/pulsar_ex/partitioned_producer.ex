@@ -325,6 +325,7 @@ defmodule PulsarEx.PartitionedProducer do
             state.broker_name
           }, #{inspect(reason)}"
         )
+
         Connection.close_producer(state.connection, state.producer_id)
         state
 
@@ -334,6 +335,7 @@ defmodule PulsarEx.PartitionedProducer do
             state.broker_name
           }, #{inspect(reason)}"
         )
+
         Connection.close_producer(state.connection, state.producer_id)
         state
 
@@ -343,6 +345,7 @@ defmodule PulsarEx.PartitionedProducer do
             state.broker_name
           }, #{inspect(reason)}"
         )
+
         Connection.close_producer(state.connection, state.producer_id)
         state
 

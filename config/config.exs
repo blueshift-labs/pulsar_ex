@@ -9,7 +9,6 @@ config :pulsar_ex,
   admin_port: 8080,
   socket_opts: [],
   connection_timeout: 5_000,
-  shutdown_timeout: 1000,
   num_connections: 1
 
 config :pulsar_ex,

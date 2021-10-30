@@ -21,6 +21,10 @@ defmodule PulsarEx.SignalHandler do
   def init({timeout, _}), do: {:ok, timeout}
 
   def handle_event(:sigterm, timeout) do
+    Logger.debug("Application received TERM signal #{:sigterm}, shutting down...")
+
+    PulsarEx.Application.shutdown!()
+
     children = Supervisor.which_children(PulsarEx.Supervisor)
     Process.send_after(self(), {:stop, children}, timeout)
     {:ok, timeout}
@@ -50,7 +54,7 @@ defmodule PulsarEx.SignalHandler do
 
   def handle_info({:stop, [{id, _, _, _} | children]}, timeout) do
     Supervisor.terminate_child(PulsarEx.Supervisor, id)
-    Process.send_after(self(), {:stop, children}, timeout)
+    Process.send(self(), {:stop, children}, [])
     {:ok, timeout}
   end
 
