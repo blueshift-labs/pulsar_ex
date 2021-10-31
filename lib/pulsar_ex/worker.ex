@@ -21,6 +21,10 @@ defmodule PulsarEx.Worker do
         |> Keyword.put_new(:dead_letter_topic, topic)
         |> Keyword.put_new(:receiving_queue_size, 10)
 
+      producer_opts =
+        producer_opts
+        |> Keyword.put_new(:send_timeout, :infinity)
+
       use PulsarEx.Consumer, opts
       @behaviour PulsarEx.WorkerCallback
 
