@@ -13,8 +13,8 @@ config :pulsar_ex,
 
 config :pulsar_ex,
   producer_opts: [
-    auto_start: true,
-    batch_enabled: true,
+    auto_start: false,
+    batch_enabled: false,
     batch_size: 100,
     flush_interval: 3000,
     properties: [client: "pulsar_ex"],
@@ -26,11 +26,11 @@ config :pulsar_ex,
     properties: [client: "pulsar_ex"]
   ],
   producers: [
-    [
-      topic: "persistent://public/default/test.json",
-      producer_access_mode: :shared,
-      properties: [test: true]
-    ]
+    # [
+    #   topic: "persistent://public/default/test.json",
+    #   producer_access_mode: :shared,
+    #   properties: [test: true]
+    # ]
   ],
   consumers: [
     # [

@@ -28,7 +28,6 @@ defmodule PulsarEx.Consumer do
       :queue_size,
       :batch,
       :acks,
-      :nacks,
       :consumer_opts,
       :metadata
     ]
@@ -60,7 +59,6 @@ defmodule PulsarEx.Consumer do
       :queue_size,
       :batch,
       :acks,
-      :nacks,
       :consumer_opts,
       :metadata,
       :broker,
@@ -79,6 +77,7 @@ defmodule PulsarEx.Consumer do
       alias PulsarEx.{
         Topic,
         Admin,
+        Bitset,
         ConnectionManager,
         Connection,
         ConsumerCallback,
@@ -226,8 +225,7 @@ defmodule PulsarEx.Consumer do
           queue: :queue.new(),
           queue_size: 0,
           batch: [],
-          acks: [],
-          nacks: []
+          acks: %{}
         }
 
         Process.send(self(), :connect, [])
@@ -257,14 +255,6 @@ defmodule PulsarEx.Consumer do
                  state.subscription,
                  state.subscription_type,
                  state.consumer_opts
-               ),
-             :ok <-
-               send_acks(
-                 connection,
-                 state.consumer_id,
-                 state.acks,
-                 state.topic_name,
-                 state.metadata
                ) do
           %{
             priority_level: priority_level,
@@ -299,8 +289,6 @@ defmodule PulsarEx.Consumer do
               queue: :queue.new(),
               queue_size: 0,
               batch: [],
-              acks: [],
-              nacks: [],
               permits: state.receiving_queue_size
           }
 
@@ -361,129 +349,124 @@ defmodule PulsarEx.Consumer do
       end
 
       @impl true
-      def handle_info(:acks, %{acks: acks} = state) do
-        case send_acks(
-               state.connection,
-               state.consumer_id,
-               acks,
-               state.topic_name,
-               state.metadata
-             ) do
-          :ok ->
+      def handle_info(:acks, state) do
+        {available_acks, acks} = Enum.split_with(state.acks, &match?({_, true}, &1))
+
+        cond do
+          length(available_acks) == 0 ->
             Process.send_after(self(), :acks, state.ack_interval)
-            {:noreply, %{state | acks: []}}
+            {:noreply, state}
 
-          err ->
-            {:stop, err, state}
-        end
-      end
+          true ->
+            start = System.monotonic_time(:millisecond)
 
-      defp send_acks(_, _, [], _, _), do: :ok
+            available_acks =
+              Enum.map(available_acks, fn {{ledgerId, entryId}, _} ->
+                {ledgerId, entryId}
+              end)
 
-      defp send_acks(connection, consumer_id, acks, topic_name, metadata) do
-        start = System.monotonic_time(:millisecond)
+            case Connection.ack(state.connection, state.consumer_id, :individual, available_acks) do
+              :ok ->
+                Logger.debug(
+                  "Sent #{length(available_acks)} acks from consumer #{state.consumer_id} for topic #{
+                    state.topic_name
+                  }"
+                )
 
-        case Connection.ack(
-               connection,
-               consumer_id,
-               :individual,
-               acks
-             ) do
-          :ok ->
-            Logger.debug(
-              "Sent #{length(acks)} acks from consumer #{consumer_id} for topic #{topic_name}"
-            )
+                :telemetry.execute(
+                  [:pulsar_ex, :consumer, :ack, :success],
+                  %{
+                    count: 1,
+                    acks: length(available_acks),
+                    duration: System.monotonic_time(:millisecond) - start
+                  },
+                  state.metadata
+                )
 
-            :telemetry.execute(
-              [:pulsar_ex, :consumer, :ack, :success],
-              %{
-                count: 1,
-                acks: length(acks),
-                duration: System.monotonic_time(:millisecond) - start
-              },
-              metadata
-            )
+                Process.send_after(self(), :acks, state.ack_interval)
+                {:noreply, %{state | acks: Enum.into(acks, %{})}}
 
-            :ok
+              {:error, err} ->
+                Logger.error(
+                  "Error sending #{length(available_acks)} acks from consumer #{state.consumer_id} for topic #{
+                    state.topic_name
+                  }, #{inspect(err)}"
+                )
 
-          {:error, err} ->
-            Logger.error(
-              "Error sending #{length(acks)} acks from consumer #{consumer_id} for topic #{
-                topic_name
-              }, #{inspect(err)}"
-            )
+                :telemetry.execute(
+                  [:pulsar_ex, :consumer, :ack, :error],
+                  %{count: 1, acks: length(available_acks)},
+                  state.metadata
+                )
 
-            :telemetry.execute(
-              [:pulsar_ex, :consumer, :ack, :error],
-              %{count: 1, acks: length(acks)},
-              metadata
-            )
-
-            {:error, err}
+                {:stop, {:error, err}, state}
+            end
         end
       end
 
       @impl true
       def handle_info(:nacks, %{state: :connecting} = state) do
-        Process.send_after(self(), :acks, state.redelivery_interval)
-        {:noreply, state}
-      end
-
-      @impl true
-      def handle_info(:nacks, %{nacks: []} = state) do
         Process.send_after(self(), :nacks, state.redelivery_interval)
         {:noreply, state}
       end
 
       @impl true
-      def handle_info(:nacks, %{nacks: nacks} = state) do
-        start = System.monotonic_time(:millisecond)
+      def handle_info(:nacks, state) do
+        {available_nacks, acks} =
+          Enum.split_with(state.acks, fn
+            {false, ts} -> Timex.after?(Timex.now(), ts)
+            _ -> false
+          end)
 
-        {resend_messages, nacks} =
-          Enum.split_with(nacks, fn {_, resend_ts} -> Timex.after?(Timex.now(), resend_ts) end)
+        cond do
+          length(available_nacks) == 0 ->
+            Process.send_after(self(), :nacks, state.redelivery_interval)
+            {:noreply, state}
 
-        message_ids = Enum.map(resend_messages, fn {message_id, _} -> message_id end)
+          true ->
+            start = System.monotonic_time(:millisecond)
 
-        if length(message_ids) > 0 do
-          case Connection.redeliver(state.connection, state.consumer_id, message_ids) do
-            :ok ->
-              Logger.debug(
-                "Sent #{length(message_ids)} nacks from consumer #{state.consumer_id} for topic #{
-                  state.topic_name
-                }"
-              )
+            available_nacks =
+              Enum.map(available_nacks, fn {{ledgerId, entryId}, _} ->
+                {ledgerId, entryId}
+              end)
 
-              :telemetry.execute(
-                [:pulsar_ex, :consumer, :nacks, :success],
-                %{
-                  count: 1,
-                  nacks: length(message_ids),
-                  duration: System.monotonic_time(:millisecond) - start
-                },
-                state.metadata
-              )
+            case Connection.redeliver(state.connection, state.consumer_id, available_nacks) do
+              :ok ->
+                Logger.debug(
+                  "Sent #{length(available_nacks)} nacks from consumer #{state.consumer_id} for topic #{
+                    state.topic_name
+                  }"
+                )
 
-              Process.send_after(self(), :nacks, state.redelivery_interval)
-              {:noreply, %{state | nacks: nacks}}
+                :telemetry.execute(
+                  [:pulsar_ex, :consumer, :nacks, :success],
+                  %{
+                    count: 1,
+                    nacks: length(available_nacks),
+                    duration: System.monotonic_time(:millisecond) - start
+                  },
+                  state.metadata
+                )
 
-            {:error, err} ->
-              Logger.error(
-                "Error sending #{length(message_ids)} nacks from consumer #{state.consumer_id} for topc #{
-                  state.topic_name
-                }, #{inspect(err)}"
-              )
+                Process.send_after(self(), :nacks, state.redelivery_interval)
+                {:noreply, %{state | acks: Enum.into(acks, %{})}}
 
-              :telemetry.execute(
-                [:pulsar_ex, :consumer, :nacks, :error],
-                %{count: 1, nacks: length(message_ids)},
-                state.metadata
-              )
+              {:error, err} ->
+                Logger.error(
+                  "Error sending #{length(available_nacks)} nacks from consumer #{
+                    state.consumer_id
+                  } for topc #{state.topic_name}, #{inspect(err)}"
+                )
 
-              {:stop, {:error, err}, state}
-          end
-        else
-          Process.send_after(self(), :nacks, state.redelivery_interval)
-          {:noreply, state}
+                :telemetry.execute(
+                  [:pulsar_ex, :consumer, :nacks, :error],
+                  %{count: 1, nacks: length(available_nacks)},
+                  state.metadata
+                )
+
+                {:stop, {:error, err}, state}
+            end
         end
       end
 
@@ -540,55 +523,20 @@ defmodule PulsarEx.Consumer do
               Enum.map(batch, fn _ -> {:error, err} end)
           end
 
-        {acks, nacks} =
+        state =
           Enum.zip(batch, result)
-          |> Enum.reduce({[], []}, fn
-            {message, :ok}, {acks, nacks} ->
-              {[message.message_id | acks], nacks}
+          |> Enum.reduce(state, fn
+            {message, :ok}, acc ->
+              track_ack(message, acc)
 
-            {message, {:ok, _}}, {acks, nacks} ->
-              {[message.message_id | acks], nacks}
+            {message, {:ok, _}}, acc ->
+              track_ack(message, acc)
 
-            {message, _}, {acks, nacks} ->
-              resend_ts =
-                case state.redelivery_policy do
-                  :exp ->
-                    Timex.add(
-                      Timex.now(),
-                      Timex.Duration.from_milliseconds(
-                        trunc(:math.pow(2, message.redelivery_count)) * state.redelivery_interval
-                      )
-                    )
-
-                  _ ->
-                    Timex.add(
-                      Timex.now(),
-                      Timex.Duration.from_milliseconds(state.redelivery_interval)
-                    )
-                end
-
-              nack = {message.message_id, resend_ts}
-              {acks, [nack | nacks]}
+            {message, _}, acc ->
+              track_nack(message, acc)
           end)
 
-        :telemetry.execute(
-          [:pulsar_ex, :consumer, :acks],
-          %{count: length(acks)},
-          state.metadata
-        )
-
-        :telemetry.execute(
-          [:pulsar_ex, :consumer, :nacks],
-          %{count: length(nacks)},
-          state.metadata
-        )
-
-        state = %{
-          state
-          | acks: state.acks ++ acks,
-            nacks: state.nacks ++ nacks,
-            permits: state.permits + length(acks)
-        }
+        state = %{state | permits: state.permits + length(batch)}
 
         handle_flow_permits(state)
       end
@@ -597,7 +545,7 @@ defmodule PulsarEx.Consumer do
              %{refill_queue_size_watermark: refill_queue_size_watermark, queue_size: queue_size} =
                state
            )
-           when queue_size >= refill_queue_size_watermark do
+           when queue_size > refill_queue_size_watermark do
         Process.send(self(), :poll, [])
 
         {:noreply, state}
@@ -618,12 +566,11 @@ defmodule PulsarEx.Consumer do
 
       defp handle_flow_permits(state) do
         start = System.monotonic_time(:millisecond)
-        permits = min(state.receiving_queue_size - state.queue_size, state.permits)
 
-        case Connection.flow_permits(state.connection, state.consumer_id, permits) do
+        case Connection.flow_permits(state.connection, state.consumer_id, state.permits) do
           :ok ->
             Logger.debug(
-              "Sent #{permits} permits from consumer #{state.consumer_id} for topic #{
+              "Sent #{state.permits} permits from consumer #{state.consumer_id} for topic #{
                 state.topic_name
               }"
             )
@@ -632,7 +579,7 @@ defmodule PulsarEx.Consumer do
               [:pulsar_ex, :consumer, :flow_permits, :success],
               %{
                 count: 1,
-                permits: permits,
+                permits: state.permits,
                 duration: System.monotonic_time(:millisecond) - start
               },
               state.metadata
@@ -648,14 +595,14 @@ defmodule PulsarEx.Consumer do
 
           {:error, err} ->
             Logger.error(
-              "Error sending #{permits} permits from consumer #{state.consumer_id} for topic #{
+              "Error sending #{state.permits} permits from consumer #{state.consumer_id} for topic #{
                 state.topic_name
               }, #{inspect(err)}"
             )
 
             :telemetry.execute(
               [:pulsar_ex, :consumer, :flow_permits, :error],
-              %{count: 1, permits: permits},
+              %{count: 1, permits: state.permits},
               state.metadata
             )
 
@@ -692,7 +639,10 @@ defmodule PulsarEx.Consumer do
           state.metadata
         )
 
-        acks = Enum.map(compacted, & &1.message_id)
+        state =
+          Enum.reduce(compacted, state, fn message, acc ->
+            track_ack(message, acc)
+          end)
 
         {batch_acked, messages} = Enum.split_with(messages, &match?(%{batch_acked: true}, &1))
 
@@ -707,6 +657,11 @@ defmodule PulsarEx.Consumer do
           %{count: length(batch_acked)},
           state.metadata
         )
+
+        state =
+          Enum.reduce(batch_acked, state, fn message, acc ->
+            track_ack(message, acc)
+          end)
 
         {dead_letters, messages} =
           Enum.split_with(messages, fn message ->
@@ -739,7 +694,10 @@ defmodule PulsarEx.Consumer do
           end)
         end
 
-        acks = acks ++ Enum.map(dead_letters, & &1.message_id)
+        state =
+          Enum.reduce(dead_letters, state, fn message, acc ->
+            track_ack(message, acc)
+          end)
 
         {queue, batch} =
           Enum.reduce(messages, {state.queue, state.batch}, fn message, {queue, batch} ->
@@ -756,7 +714,6 @@ defmodule PulsarEx.Consumer do
            | queue: queue,
              batch: batch,
              queue_size: state.queue_size + length(messages),
-             acks: state.acks ++ acks,
              permits:
                state.permits + length(compacted) + length(batch_acked) + length(dead_letters)
          }}
@@ -785,9 +742,11 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def terminate(reason, state) do
-        if length(state.acks) > 0 do
+        Connection.stop_consumer(state.connection, state.consumer_id)
+
+        if Enum.count(state.acks) > 0 do
           Logger.error(
-            "Stopping consumer while #{length(state.acks)} acks are still left in consumer #{
+            "Stopping consumer while #{Enum.count(state.acks)} acks are still left in consumer #{
               state.consumer_id
             } for topic #{state.topic_name}"
           )
@@ -801,7 +760,6 @@ defmodule PulsarEx.Consumer do
               }"
             )
 
-            Connection.stop_consumer(state.connection, state.consumer_id)
             state
 
           :normal ->
@@ -811,7 +769,6 @@ defmodule PulsarEx.Consumer do
               }"
             )
 
-            Connection.stop_consumer(state.connection, state.consumer_id)
             state
 
           {:shutdown, _} ->
@@ -821,7 +778,6 @@ defmodule PulsarEx.Consumer do
               }"
             )
 
-            Connection.stop_consumer(state.connection, state.consumer_id)
             state
 
           _ ->
@@ -839,6 +795,66 @@ defmodule PulsarEx.Consumer do
 
             state
         end
+      end
+
+      defp track_ack(%{message_id: message_id, batch_size: batch_size} = message, state)
+           when batch_size > 1 do
+        key = {message_id.ledgerId, message_id.entryId}
+
+        value =
+          case Map.get(state.acks, key) do
+            nil ->
+              message.ack_set
+
+            true ->
+              true
+
+            {false, ts} ->
+              {false, ts}
+
+            ack_set ->
+              bitset =
+                Bitset.from_words(ack_set, batch_size)
+                |> Bitset.and_set(Bitset.from_words(message.ack_set, batch_size))
+
+              if bitset == Bitset.new(batch_size) do
+                true
+              else
+                Bitset.to_words(bitset)
+              end
+          end
+
+        acks = Map.put(state.acks, key, value)
+        %{state | acks: acks}
+      end
+
+      defp track_ack(%{message_id: message_id}, state) do
+        key = {message_id.ledgerId, message_id.entryId}
+        acks = Map.put(state.acks, key, true)
+        %{state | acks: acks}
+      end
+
+      defp track_nack(%{message_id: message_id, redelivery_count: redelivery_count}, state) do
+        resend_ts =
+          case state.redelivery_policy do
+            :exp ->
+              Timex.add(
+                Timex.now(),
+                Timex.Duration.from_milliseconds(
+                  trunc(:math.pow(2, redelivery_count)) * state.redelivery_interval
+                )
+              )
+
+            _ ->
+              Timex.add(
+                Timex.now(),
+                Timex.Duration.from_milliseconds(state.redelivery_interval)
+              )
+          end
+
+        key = {message_id.ledgerId, message_id.entryId}
+        acks = Map.put(state.acks, key, {false, resend_ts})
+        %{state | acks: acks}
       end
     end
   end

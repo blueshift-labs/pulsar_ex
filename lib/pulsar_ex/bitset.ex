@@ -10,6 +10,21 @@ defmodule PulsarEx.Bitset do
     %Bitset{size: size, data: <<0::size(bits)>>}
   end
 
+  def and_set(%Bitset{size: a_size, data: a_data}, %Bitset{size: b_size, data: b_data})
+      when a_size == b_size do
+    %Bitset{size: a_size, data: and_bits(a_data, b_data, <<>>)}
+  end
+
+  defp and_bits(<<>>, <<>>, res), do: res
+
+  defp and_bits(<<1::1, a::bits>>, <<1::1, b::bits>>, res) do
+    and_bits(a, b, <<res::bits, 1::1>>)
+  end
+
+  defp and_bits(<<_::1, a::bits>>, <<_::1, b::bits>>, res) do
+    and_bits(a, b, <<res::bits, 0::1>>)
+  end
+
   def set?(%Bitset{size: size}, pos) when pos >= size, do: false
 
   def set?(%Bitset{data: data}, pos) do
