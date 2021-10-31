@@ -240,6 +240,14 @@ defmodule PulsarEx.Consumer do
       end
 
       @impl true
+      def handle_call(:flow_permits, _from, state) do
+        reply =
+          Connection.flow_permits(state.connection, state.consumer_id, state.receiving_queue_size)
+
+        {:reply, reply, state}
+      end
+
+      @impl true
       def handle_info(:connect, %{state: :connecting} = state) do
         if state.connection_ref != nil do
           Process.demonitor(state.connection_ref)
@@ -362,6 +370,11 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:acks, %{acks: acks} = state) do
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :acks],
+          %{tick: 1}
+        )
+
         case send_acks(
                state.connection,
                state.consumer_id,
@@ -495,6 +508,11 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:poll, state) do
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :poll],
+          %{tick: 1}
+        )
+
         # In the event of shutting down, we will stop processing any the messages in queue/batch, thus generating no more acks/nacks.
         # Acks will continue being sent to broker as well as flow permits and nacks.
         # However, no more messages will be processed anymore.

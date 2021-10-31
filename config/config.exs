@@ -14,7 +14,7 @@ config :pulsar_ex,
 config :pulsar_ex,
   producer_opts: [
     auto_start: true,
-    batch_enabled: true,
+    batch_enabled: false,
     batch_size: 100,
     flush_interval: 3000,
     properties: [client: "pulsar_ex"],
