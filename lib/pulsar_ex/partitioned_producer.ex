@@ -8,10 +8,10 @@ defmodule PulsarEx.PartitionedProducer do
       :topic_name,
       :partition,
       :metadata,
-      :producer_id,
       :batch_enabled,
       :batch_size,
       :flush_interval,
+      :send_timeout,
       :queue,
       :queue_size,
       :last_sequence_id,
@@ -31,6 +31,7 @@ defmodule PulsarEx.PartitionedProducer do
       :batch_enabled,
       :batch_size,
       :flush_interval,
+      :send_timeout,
       :queue,
       :queue_size,
       :last_sequence_id,
@@ -59,10 +60,10 @@ defmodule PulsarEx.PartitionedProducer do
   @flush_interval 1000
   @connection_interval 1000
   @max_connection_attempts 5
-  @send_timeout 30_000
+  @send_timeout :infinity
 
   def produce(pid, payload, message_opts) do
-    GenServer.call(pid, {:produce, payload, message_opts}, @send_timeout)
+    GenServer.call(pid, {:produce, payload, message_opts}, :infinity)
   end
 
   def start_link({topic_name, partition, producer_opts}) do
@@ -98,10 +99,10 @@ defmodule PulsarEx.PartitionedProducer do
       batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
       batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
       flush_interval: max(Keyword.get(producer_opts, :flush_interval, @flush_interval), 100),
+      send_timeout: Keyword.get(producer_opts, :send_timeout, @send_timeout),
       queue: :queue.new(),
       queue_size: 0,
       last_sequence_id: -1,
-      producer_id: PulsarEx.Application.producer_id(),
       producer_opts: producer_opts,
       connection_attempt: 0,
       max_connection_attempts:
@@ -130,11 +131,11 @@ defmodule PulsarEx.PartitionedProducer do
          {:ok, reply} <-
            Connection.create_producer(
              connection,
-             state.producer_id,
              Topic.to_name(state.topic),
              state.producer_opts
            ) do
       %{
+        producer_id: producer_id,
         producer_name: producer_name,
         max_message_size: max_message_size,
         producer_access_mode: producer_access_mode,
@@ -155,6 +156,7 @@ defmodule PulsarEx.PartitionedProducer do
           broker_name: Broker.to_name(broker),
           connection: connection,
           connection_ref: ref,
+          producer_id: producer_id,
           producer_name: producer_name,
           producer_access_mode: producer_access_mode,
           max_message_size: max_message_size,
@@ -283,7 +285,7 @@ defmodule PulsarEx.PartitionedProducer do
         state.producer_id,
         sequence_id,
         message,
-        @send_timeout
+        state.send_timeout
       )
 
     case reply do
@@ -335,7 +337,6 @@ defmodule PulsarEx.PartitionedProducer do
           }, #{inspect(reason)}"
         )
 
-        Connection.close_producer(state.connection, state.producer_id)
         state
 
       :normal ->
@@ -345,7 +346,6 @@ defmodule PulsarEx.PartitionedProducer do
           }, #{inspect(reason)}"
         )
 
-        Connection.close_producer(state.connection, state.producer_id)
         state
 
       {:shutdown, _} ->
@@ -355,7 +355,6 @@ defmodule PulsarEx.PartitionedProducer do
           }, #{inspect(reason)}"
         )
 
-        Connection.close_producer(state.connection, state.producer_id)
         state
 
       _ ->
@@ -418,7 +417,7 @@ defmodule PulsarEx.PartitionedProducer do
             state.producer_id,
             sequence_id,
             message,
-            @send_timeout
+            state.send_timeout
           )
 
         case reply do
@@ -452,7 +451,7 @@ defmodule PulsarEx.PartitionedProducer do
             state.producer_id,
             sequence_id,
             messages,
-            @send_timeout
+            state.send_timeout
           )
 
         case reply do

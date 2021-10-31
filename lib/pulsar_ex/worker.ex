@@ -21,6 +21,10 @@ defmodule PulsarEx.Worker do
         |> Keyword.put_new(:dead_letter_topic, topic)
         |> Keyword.put_new(:receiving_queue_size, 10)
 
+      producer_opts =
+        producer_opts
+        |> Keyword.put_new(:send_timeout, :infinity)
+
       use PulsarEx.Consumer, opts
       @behaviour PulsarEx.WorkerCallback
 
@@ -120,7 +124,16 @@ defmodule PulsarEx.Worker do
       end
 
       def start(opts \\ []) do
-        PulsarEx.start_consumer(@topic, @subscription, __MODULE__, Keyword.merge(@opts, opts))
+        workers = Keyword.get(opts, :workers)
+
+        opts =
+          if workers do
+            Keyword.merge(@opts, opts) |> Keyword.put(:num_consumers, workers)
+          else
+            Keyword.merge(@opts, opts)
+          end
+
+        PulsarEx.start_consumer(@topic, @subscription, __MODULE__, opts)
       end
 
       def stop() do
