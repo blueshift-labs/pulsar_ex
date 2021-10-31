@@ -325,6 +325,8 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def terminate(reason, state) do
+    Connection.close_producer(state.connection, state.producer_id)
+
     reply_all(state.queue, reason)
 
     case reason do
@@ -335,7 +337,6 @@ defmodule PulsarEx.PartitionedProducer do
           }, #{inspect(reason)}"
         )
 
-        Connection.close_producer(state.connection, state.producer_id)
         state
 
       :normal ->
@@ -345,7 +346,6 @@ defmodule PulsarEx.PartitionedProducer do
           }, #{inspect(reason)}"
         )
 
-        Connection.close_producer(state.connection, state.producer_id)
         state
 
       {:shutdown, _} ->
@@ -355,7 +355,6 @@ defmodule PulsarEx.PartitionedProducer do
           }, #{inspect(reason)}"
         )
 
-        Connection.close_producer(state.connection, state.producer_id)
         state
 
       _ ->

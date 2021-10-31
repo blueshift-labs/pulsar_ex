@@ -50,8 +50,10 @@ defmodule PulsarEx.Connection do
     CommandSubscribe,
     CommandFlow,
     CommandAck,
+    CommandAckResponse,
     CommandRedeliverUnacknowledgedMessages,
-    CommandMessage
+    CommandMessage,
+    MessageIdData
   }
 
   @client_version "PulsarEx #{Mix.Project.config()[:version]}"
@@ -461,10 +463,15 @@ defmodule PulsarEx.Connection do
       }"
     )
 
+    message_ids =
+      Enum.map(msg_ids, fn {ledgerId, entryId} ->
+        MessageIdData.new(ledgerId: ledgerId, entryId: entryId)
+      end)
+
     command =
       CommandRedeliverUnacknowledgedMessages.new(
         consumer_id: consumer_id,
-        message_ids: msg_ids
+        message_ids: message_ids
       )
 
     case :gen_tcp.send(state.socket, encode_command(command)) do
@@ -495,16 +502,24 @@ defmodule PulsarEx.Connection do
       "Sending #{length(msg_ids)} acks to broker #{state.broker_name} for consumer #{consumer_id}"
     )
 
-    command =
+    message_ids =
+      Enum.map(msg_ids, fn {ledgerId, entryId} ->
+        MessageIdData.new(ledgerId: ledgerId, entryId: entryId)
+      end)
+
+    request =
       CommandAck.new(
+        request_id: state.request_id,
         consumer_id: consumer_id,
         ack_type: ack_type(ack_type),
-        message_id: msg_ids,
+        message_id: message_ids,
         txnid_least_bits: nil,
         txnid_most_bits: nil
       )
 
-    case :gen_tcp.send(state.socket, encode_command(command)) do
+    state = %{state | request_id: state.request_id + 1}
+
+    case :gen_tcp.send(state.socket, encode_command(request)) do
       :ok ->
         :telemetry.execute(
           [:pulsar_ex, :connection, :ack, :success],
@@ -512,7 +527,14 @@ defmodule PulsarEx.Connection do
           state.metadata
         )
 
-        {:reply, :ok, state}
+        requests =
+          Map.put(
+            state.requests,
+            {:request_id, request.request_id},
+            {nil, System.monotonic_time(:millisecond), request}
+          )
+
+        {:reply, :ok, %{state | requests: requests}}
 
       {:error, _} = err ->
         :telemetry.execute(
@@ -847,6 +869,28 @@ defmodule PulsarEx.Connection do
         )
 
         state
+
+      {nil, ts, %CommandCloseProducer{producer_id: producer_id}} ->
+        duration = System.monotonic_time(:millisecond) - ts
+
+        Logger.error(
+          "Error stopping producer #{producer_id} from broker #{state.broker_name}, after #{
+            duration
+          }ms, #{inspect(err)}"
+        )
+
+        state
+
+      {nil, ts, %CommandCloseConsumer{consumer_id: consumer_id}} ->
+        duration = System.monotonic_time(:millisecond) - ts
+
+        Logger.error(
+          "Error stopping consumer #{consumer_id} from broker #{state.broker_name}, after #{
+            duration
+          }ms, #{inspect(err)}"
+        )
+
+        state
     end
   end
 
@@ -895,6 +939,40 @@ defmodule PulsarEx.Connection do
       [:pulsar_ex, :connection, :send, :error],
       %{count: 1},
       state.metadata
+    )
+
+    state
+  end
+
+  defp handle_command(
+         %CommandAckResponse{request_id: request_id, error: nil} = response,
+         _,
+         state
+       ) do
+    {{nil, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
+    state = %{state | requests: requests}
+
+    duration = System.monotonic_time(:millisecond) - ts
+
+    Logger.debug(
+      "Received Ack Response from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
+        inspect(duration)
+      }ms, #{inspect(response)}"
+    )
+
+    state
+  end
+
+  defp handle_command(%CommandAckResponse{request_id: request_id} = response, _, state) do
+    {{nil, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
+    state = %{state | requests: requests}
+
+    duration = System.monotonic_time(:millisecond) - ts
+
+    Logger.error(
+      "Received Ack Error from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
+        inspect(response)
+      }, after #{duration}ms"
     )
 
     state
