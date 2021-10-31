@@ -223,6 +223,9 @@ defmodule PulsarEx.IO do
       message_id: command.message_id,
       compacted_out: false,
       batch_acked: false,
+      batch_index: 0,
+      batch_size: 1,
+      ack_set: [],
       producer_name: metadata.producer_name,
       sequence_id: metadata.sequence_id,
       publish_time: from_timestamp(metadata.publish_time),
@@ -249,17 +252,13 @@ defmodule PulsarEx.IO do
       |> Bitset.flip()
       |> Bitset.to_words()
 
-    message_id = %{
-      command.message_id
-      | ack_set: ack_set,
-        batch_index: batch_index,
-        batch_size: metadata.num_messages_in_batch
-    }
-
     %ConsumerMessage{
-      message_id: message_id,
+      message_id: command.message_id,
       compacted_out: single_meta.compacted_out,
       batch_acked: false,
+      batch_index: batch_index,
+      batch_size: metadata.num_messages_in_batch,
+      ack_set: ack_set,
       producer_name: metadata.producer_name,
       sequence_id: single_meta.sequence_id,
       publish_time: from_timestamp(metadata.publish_time),
@@ -287,17 +286,13 @@ defmodule PulsarEx.IO do
       |> Bitset.flip()
       |> Bitset.to_words()
 
-    message_id = %{
-      command.message_id
-      | ack_set: ack_set,
-        batch_index: batch_index,
-        batch_size: metadata.num_messages_in_batch
-    }
-
     %ConsumerMessage{
-      message_id: message_id,
+      message_id: command.message_id,
       compacted_out: single_meta.compacted_out,
       batch_acked: !Bitset.set?(bitset, batch_index),
+      batch_index: batch_index,
+      batch_size: metadata.num_messages_in_batch,
+      ack_set: ack_set,
       producer_name: metadata.producer_name,
       sequence_id: single_meta.sequence_id,
       publish_time: from_timestamp(metadata.publish_time),
