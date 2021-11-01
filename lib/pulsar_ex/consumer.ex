@@ -605,7 +605,7 @@ defmodule PulsarEx.Consumer do
           state
           | acks: state.acks ++ acks,
             nacks: state.nacks ++ nacks,
-            permits: state.permits + length(acks)
+            permits: state.permits + length(batch)
         }
 
         handle_flow_permits(state)
@@ -615,7 +615,7 @@ defmodule PulsarEx.Consumer do
              %{refill_queue_size_watermark: refill_queue_size_watermark, queue_size: queue_size} =
                state
            )
-           when queue_size >= refill_queue_size_watermark do
+           when queue_size > refill_queue_size_watermark do
         Process.send(self(), :poll, [])
 
         {:noreply, state}
