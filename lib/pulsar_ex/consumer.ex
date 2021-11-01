@@ -605,7 +605,7 @@ defmodule PulsarEx.Consumer do
           state
           | acks: state.acks ++ acks,
             nacks: state.nacks ++ nacks,
-            permits: state.permits + length(acks)
+            permits: state.permits + length(batch)
         }
 
         handle_flow_permits(state)
@@ -615,7 +615,7 @@ defmodule PulsarEx.Consumer do
              %{refill_queue_size_watermark: refill_queue_size_watermark, queue_size: queue_size} =
                state
            )
-           when queue_size >= refill_queue_size_watermark do
+           when queue_size > refill_queue_size_watermark do
         Process.send(self(), :poll, [])
 
         {:noreply, state}
@@ -636,12 +636,11 @@ defmodule PulsarEx.Consumer do
 
       defp handle_flow_permits(state) do
         start = System.monotonic_time(:millisecond)
-        permits = min(state.receiving_queue_size - state.queue_size, state.permits)
 
-        case Connection.flow_permits(state.connection, state.consumer_id, permits) do
+        case Connection.flow_permits(state.connection, state.consumer_id, state.permits) do
           :ok ->
             Logger.debug(
-              "Sent #{permits} permits from consumer #{state.consumer_id} for topic #{
+              "Sent #{state.permits} permits from consumer #{state.consumer_id} for topic #{
                 state.topic_name
               }"
             )
@@ -650,7 +649,7 @@ defmodule PulsarEx.Consumer do
               [:pulsar_ex, :consumer, :flow_permits, :success],
               %{
                 count: 1,
-                permits: permits,
+                permits: state.permits,
                 duration: System.monotonic_time(:millisecond) - start
               },
               state.metadata
@@ -666,14 +665,14 @@ defmodule PulsarEx.Consumer do
 
           {:error, err} ->
             Logger.error(
-              "Error sending #{permits} permits from consumer #{state.consumer_id} for topic #{
+              "Error sending #{state.permits} permits from consumer #{state.consumer_id} for topic #{
                 state.topic_name
               }, #{inspect(err)}"
             )
 
             :telemetry.execute(
               [:pulsar_ex, :consumer, :flow_permits, :error],
-              %{count: 1, permits: permits},
+              %{count: 1, permits: state.permits},
               state.metadata
             )
 
