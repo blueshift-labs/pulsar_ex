@@ -396,6 +396,8 @@ defmodule PulsarEx.Consumer do
       defp send_acks(connection, consumer_id, acks, topic_name, metadata) do
         start = System.monotonic_time(:millisecond)
 
+        acks = Enum.map(acks, fn ack -> %{ack | ack_set: []} end)
+
         case Connection.ack(
                connection,
                consumer_id,
