@@ -819,6 +819,7 @@ defmodule PulsarEx.Consumer do
                 |> Bitset.and_set(Bitset.from_words(message.ack_set, batch_size))
 
               if bitset == Bitset.new(batch_size) do
+                Logger.warn("Completing batch #{inspect(message_id)}")
                 true
               else
                 Bitset.to_words(bitset)
