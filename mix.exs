@@ -41,7 +41,6 @@ defmodule PulsarEx.MixProject do
       {:telemetry, "~> 0.4"},
       {:timex, "~> 3.0"},
       {:gen_stage, "~> 1.1.2"},
-      {:rollbax, "~> 0.11.0"},
       {:jason, "~> 1.2"}
     ]
   end
