@@ -13,14 +13,6 @@ defmodule PulsarEx.Application do
     SignalHandler
   }
 
-  def producer_id() do
-    :ets.update_counter(@tab, :producer_id, {2, 1}, {:producer_id, 0})
-  end
-
-  def consumer_id() do
-    :ets.update_counter(@tab, :consumer_id, {2, 1}, {:consumer_id, 0})
-  end
-
   def shutdown!() do
     :ets.insert(@tab, {:shutdown, true})
   end

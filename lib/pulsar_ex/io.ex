@@ -1,8 +1,6 @@
 defmodule PulsarEx.IO do
   alias PulsarEx.{Proto, ProducerMessage, ConsumerMessage}
 
-  alias PulsarEx.Bitset
-
   @magic_number 3585
 
   def ack_type(:individual), do: :Individual
@@ -221,11 +219,8 @@ defmodule PulsarEx.IO do
       ) do
     %ConsumerMessage{
       message_id: command.message_id,
-      compacted_out: false,
-      batch_acked: false,
       batch_index: 0,
       batch_size: 1,
-      ack_set: [],
       producer_name: metadata.producer_name,
       sequence_id: metadata.sequence_id,
       publish_time: from_timestamp(metadata.publish_time),
@@ -240,59 +235,16 @@ defmodule PulsarEx.IO do
   end
 
   def to_consumer_message(
-        %Proto.CommandMessage{ack_set: []} = command,
+        %Proto.CommandMessage{} = command,
         %Proto.MessageMetadata{} = metadata,
         %Proto.SingleMessageMetadata{} = single_meta,
         batch_index,
         payload
       ) do
-    ack_set =
-      Bitset.new(metadata.num_messages_in_batch)
-      |> Bitset.set(batch_index)
-      |> Bitset.flip()
-      |> Bitset.to_words()
-
     %ConsumerMessage{
       message_id: command.message_id,
-      compacted_out: single_meta.compacted_out,
-      batch_acked: false,
       batch_index: batch_index,
       batch_size: metadata.num_messages_in_batch,
-      ack_set: ack_set,
-      producer_name: metadata.producer_name,
-      sequence_id: single_meta.sequence_id,
-      publish_time: from_timestamp(metadata.publish_time),
-      properties: from_kv(single_meta.properties),
-      partition_key: single_meta.partition_key,
-      event_time: from_timestamp(single_meta.event_time),
-      ordering_key: single_meta.ordering_key,
-      redelivery_count: command.redelivery_count,
-      payload: payload
-    }
-  end
-
-  def to_consumer_message(
-        %Proto.CommandMessage{ack_set: ack_set} = command,
-        %Proto.MessageMetadata{} = metadata,
-        %Proto.SingleMessageMetadata{} = single_meta,
-        batch_index,
-        payload
-      ) do
-    bitset = Bitset.from_words(ack_set, metadata.num_messages_in_batch)
-
-    ack_set =
-      Bitset.new(metadata.num_messages_in_batch)
-      |> Bitset.set(batch_index)
-      |> Bitset.flip()
-      |> Bitset.to_words()
-
-    %ConsumerMessage{
-      message_id: command.message_id,
-      compacted_out: single_meta.compacted_out,
-      batch_acked: !Bitset.set?(bitset, batch_index),
-      batch_index: batch_index,
-      batch_size: metadata.num_messages_in_batch,
-      ack_set: ack_set,
       producer_name: metadata.producer_name,
       sequence_id: single_meta.sequence_id,
       publish_time: from_timestamp(metadata.publish_time),
