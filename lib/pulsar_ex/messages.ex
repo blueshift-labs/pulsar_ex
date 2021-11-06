@@ -16,11 +16,8 @@ end
 defmodule PulsarEx.ConsumerMessage do
   @enforce_keys [
     :message_id,
-    :compacted_out,
-    :batch_acked,
     :batch_index,
     :batch_size,
-    :ack_set,
     :redelivery_count,
     :producer_name,
     :sequence_id,
@@ -29,11 +26,8 @@ defmodule PulsarEx.ConsumerMessage do
   ]
   defstruct [
     :message_id,
-    :compacted_out,
-    :batch_acked,
     :batch_index,
     :batch_size,
-    :ack_set,
     :redelivery_count,
     :producer_name,
     :sequence_id,
