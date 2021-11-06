@@ -31,12 +31,14 @@ defmodule PulsarEx.ConsumerManager do
   @impl true
   def init(false) do
     Logger.debug("Starting consumer manager")
+    Process.flag(:trap_exit, true)
     {:ok, %{}}
   end
 
   @impl true
   def init(true) do
     Logger.debug("Starting consumer manager")
+    Process.flag(:trap_exit, true)
 
     Application.get_env(:pulsar_ex, :consumers, [])
     |> Enum.reduce_while({:ok, %{}}, fn opts, {:ok, refs} ->
@@ -150,6 +152,13 @@ defmodule PulsarEx.ConsumerManager do
       )
 
     {:noreply, Map.put(state, {topic_name, subscription}, ref)}
+  end
+
+  @impl true
+  def terminate(reason, state) do
+    Logger.error("Shutting down Consumer Manager, #{inspect(reason)}")
+    Rollbax.report(:exit, reason, System.stacktrace())
+    state
   end
 
   defp consumer_opts(opts) do
