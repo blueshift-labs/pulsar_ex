@@ -742,7 +742,11 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def terminate(reason, state) do
-        Connection.stop_consumer(state.connection, state.consumer_id)
+        Rollbax.report(:exit, reason, System.stacktrace())
+
+        if state.state != :connecting do
+          Connection.stop_consumer(state.connection, state.consumer_id)
+        end
 
         if Enum.count(state.acks) > 0 do
           Logger.error(

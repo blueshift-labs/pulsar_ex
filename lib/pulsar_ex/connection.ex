@@ -166,6 +166,8 @@ defmodule PulsarEx.Connection do
 
   @impl true
   def terminate(reason, state) do
+    Rollbax.report(:exit, reason, System.stacktrace())
+
     case reason do
       :normal ->
         Logger.debug("Closing connection from broker #{state.broker_name}}, #{inspect(reason)}")

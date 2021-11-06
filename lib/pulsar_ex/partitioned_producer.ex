@@ -12,6 +12,7 @@ defmodule PulsarEx.PartitionedProducer do
       :batch_enabled,
       :batch_size,
       :flush_interval,
+      :send_timeout,
       :queue,
       :queue_size,
       :last_sequence_id,
@@ -31,6 +32,7 @@ defmodule PulsarEx.PartitionedProducer do
       :batch_enabled,
       :batch_size,
       :flush_interval,
+      :send_timeout,
       :queue,
       :queue_size,
       :last_sequence_id,
@@ -61,8 +63,8 @@ defmodule PulsarEx.PartitionedProducer do
   @max_connection_attempts 5
   @send_timeout 30_000
 
-  def produce(pid, payload, message_opts) do
-    GenServer.call(pid, {:produce, payload, message_opts}, @send_timeout)
+  def produce(pid, payload, message_opts, timeout \\ @send_timeout) do
+    GenServer.call(pid, {:produce, payload, message_opts}, timeout)
   end
 
   def start_link({topic_name, partition, producer_opts}) do
@@ -98,6 +100,7 @@ defmodule PulsarEx.PartitionedProducer do
       batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
       batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
       flush_interval: max(Keyword.get(producer_opts, :flush_interval, @flush_interval), 100),
+      send_timeout: Keyword.get(producer_opts, :send_timeout, @send_timeout),
       queue: :queue.new(),
       queue_size: 0,
       last_sequence_id: -1,
@@ -283,7 +286,7 @@ defmodule PulsarEx.PartitionedProducer do
         state.producer_id,
         sequence_id,
         message,
-        @send_timeout
+        state.send_timeout
       )
 
     case reply do
@@ -325,7 +328,11 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def terminate(reason, state) do
-    Connection.close_producer(state.connection, state.producer_id)
+    Rollbax.report(:exit, reason, System.stacktrace())
+
+    if state.state != :connecting do
+      Connection.close_producer(state.connection, state.producer_id)
+    end
 
     reply_all(state.queue, reason)
 
@@ -417,7 +424,7 @@ defmodule PulsarEx.PartitionedProducer do
             state.producer_id,
             sequence_id,
             message,
-            @send_timeout
+            state.send_timeout
           )
 
         case reply do
@@ -451,7 +458,7 @@ defmodule PulsarEx.PartitionedProducer do
             state.producer_id,
             sequence_id,
             messages,
-            @send_timeout
+            state.send_timeout
           )
 
         case reply do

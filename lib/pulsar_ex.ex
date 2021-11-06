@@ -8,6 +8,8 @@ defmodule PulsarEx do
     ConsumerManager
   }
 
+  @send_timeout 30_000
+
   def produce(topic_name, payload, message_opts \\ [], producer_opts \\ [])
 
   def produce(topic_name, payload, message_opts, producer_opts)
@@ -16,6 +18,8 @@ defmodule PulsarEx do
   end
 
   def produce(topic_name, payload, message_opts, producer_opts) do
+    send_timeout = Keyword.get(producer_opts, :send_timeout, @send_timeout)
+
     with {:ok, {%Topic{partition: nil}, partitions}} <- PartitionManager.lookup(topic_name) do
       partition =
         message_opts
@@ -23,7 +27,7 @@ defmodule PulsarEx do
         |> Partitioner.assign(partitions)
 
       with {:ok, producer} <- ProducerManager.get_producer(topic_name, partition, producer_opts) do
-        PartitionedProducer.produce(producer, payload, message_opts)
+        PartitionedProducer.produce(producer, payload, message_opts, send_timeout)
       end
     else
       {:ok, {%Topic{}, _}} -> {:error, :partitioned_topic}
