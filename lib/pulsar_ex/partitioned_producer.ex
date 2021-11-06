@@ -325,7 +325,11 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def terminate(reason, state) do
-    Connection.close_producer(state.connection, state.producer_id)
+    Rollbax.report(:exit, reason, System.stacktrace())
+
+    if state.state != :connecting do
+      Connection.close_producer(state.connection, state.producer_id)
+    end
 
     reply_all(state.queue, reason)
 
