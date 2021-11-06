@@ -157,7 +157,6 @@ defmodule PulsarEx.ConsumerManager do
   @impl true
   def terminate(reason, state) do
     Logger.error("Shutting down Consumer Manager, #{inspect(reason)}")
-    Rollbax.report(:exit, reason, System.stacktrace())
     state
   end
 

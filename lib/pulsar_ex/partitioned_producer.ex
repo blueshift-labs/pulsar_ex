@@ -8,7 +8,6 @@ defmodule PulsarEx.PartitionedProducer do
       :topic_name,
       :partition,
       :metadata,
-      :producer_id,
       :batch_enabled,
       :batch_size,
       :flush_interval,
@@ -104,7 +103,6 @@ defmodule PulsarEx.PartitionedProducer do
       queue: :queue.new(),
       queue_size: 0,
       last_sequence_id: -1,
-      producer_id: PulsarEx.Application.producer_id(),
       producer_opts: producer_opts,
       connection_attempt: 0,
       max_connection_attempts:
@@ -133,11 +131,11 @@ defmodule PulsarEx.PartitionedProducer do
          {:ok, reply} <-
            Connection.create_producer(
              connection,
-             state.producer_id,
              Topic.to_name(state.topic),
              state.producer_opts
            ) do
       %{
+        producer_id: producer_id,
         producer_name: producer_name,
         max_message_size: max_message_size,
         producer_access_mode: producer_access_mode,
@@ -158,6 +156,7 @@ defmodule PulsarEx.PartitionedProducer do
           broker_name: Broker.to_name(broker),
           connection: connection,
           connection_ref: ref,
+          producer_id: producer_id,
           producer_name: producer_name,
           producer_access_mode: producer_access_mode,
           max_message_size: max_message_size,
@@ -328,12 +327,6 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def terminate(reason, state) do
-    Rollbax.report(:exit, reason, System.stacktrace())
-
-    if state.state != :connecting do
-      Connection.close_producer(state.connection, state.producer_id)
-    end
-
     reply_all(state.queue, reason)
 
     case reason do
