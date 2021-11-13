@@ -58,8 +58,8 @@ defmodule PulsarEx.PartitionedProducer do
   @batch_enabled true
   @batch_size 100
   @flush_interval 1000
-  @connection_interval 1000
-  @max_connection_attempts 5
+  @connection_interval 3000
+  @max_connection_attempts 10
   @send_timeout :infinity
 
   def produce(pid, payload, message_opts) do
@@ -216,7 +216,14 @@ defmodule PulsarEx.PartitionedProducer do
       }"
     )
 
-    {:stop, {:error, :connection_down}, state}
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :connection_down],
+      %{count: 1},
+      state.metadata
+    )
+
+    Process.send_after(self(), :connect, @connection_interval)
+    {:noreply, %{state | state: :connecting}}
   end
 
   @impl true

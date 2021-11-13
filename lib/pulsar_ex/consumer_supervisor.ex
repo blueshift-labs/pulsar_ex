@@ -3,6 +3,8 @@ defmodule PulsarEx.ConsumerSupervisor do
 
   alias PulsarEx.{ConsumerRegistry, Consumers, ConsumerManager}
 
+  @max_restarts 100
+
   def start_link(_) do
     Supervisor.start_link(__MODULE__, :init, name: __MODULE__)
   end
@@ -14,7 +16,7 @@ defmodule PulsarEx.ConsumerSupervisor do
 
     children = [
       {Registry, keys: :unique, name: ConsumerRegistry},
-      {DynamicSupervisor, strategy: :one_for_one, name: Consumers},
+      {DynamicSupervisor, strategy: :one_for_one, max_restarts: @max_restarts, name: Consumers},
       {ConsumerManager, auto_start}
     ]
 

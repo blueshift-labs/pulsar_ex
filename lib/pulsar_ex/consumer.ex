@@ -116,8 +116,8 @@ defmodule PulsarEx.Consumer do
                                    flush_interval: 1000,
                                    send_timeout: :infinity
                                  )
-      @max_connection_attempts Keyword.get(opts, :max_connection_attempts, 5)
-      @connection_interval 1000
+      @max_connection_attempts Keyword.get(opts, :max_connection_attempts, 10)
+      @connection_interval 3000
 
       def start_link({topic_name, partition, subscription, consumer_opts}) do
         GenServer.start_link(__MODULE__, {topic_name, partition, subscription, consumer_opts})
@@ -357,7 +357,14 @@ defmodule PulsarEx.Consumer do
       def handle_info({:DOWN, _, _, _, _}, state) do
         Logger.error("Connection down for consumer with topic #{state.topic_name}")
 
-        {:stop, {:error, :connection_down}, state}
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :connection_down],
+          %{count: 1},
+          state.metadata
+        )
+
+        Process.send_after(self(), :connect, @connection_interval)
+        {:noreply, %{state | state: :connecting}}
       end
 
       @impl true
@@ -426,7 +433,8 @@ defmodule PulsarEx.Consumer do
                   state.metadata
                 )
 
-                {:stop, {:error, err}, state}
+                Process.send_after(self(), :connect, @connection_interval)
+                {:noreply, %{state | state: :connecting}}
             end
         end
       end
@@ -501,7 +509,8 @@ defmodule PulsarEx.Consumer do
                   state.metadata
                 )
 
-                {:stop, {:error, err}, state}
+                Process.send_after(self(), :connect, @connection_interval)
+                {:noreply, %{state | state: :connecting}}
             end
         end
       end
@@ -643,7 +652,8 @@ defmodule PulsarEx.Consumer do
               state.metadata
             )
 
-            {:stop, {:error, err}, state}
+            Process.send_after(self(), :connect, @connection_interval)
+            {:noreply, %{state | state: :connecting}}
         end
       end
 
