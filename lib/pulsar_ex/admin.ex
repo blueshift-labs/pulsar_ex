@@ -1,6 +1,31 @@
 defmodule PulsarEx.Admin do
   alias PulsarEx.{Broker, Topic}
 
+  def health_check(%Broker{host: host}, admin_port) do
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/brokers/health"
+    }
+
+    with {:ok, 200, _, client_ref} <-
+           :hackney.get(URI.to_string(url), [], "", []),
+         {:ok, "ok"} <- :hackney.body(client_ref) do
+      :ok
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      {:ok, body} ->
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
   def lookup_topic_partitions(hosts, admin_port, %Topic{} = topic)
       when is_list(hosts) do
     hosts

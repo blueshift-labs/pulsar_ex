@@ -20,7 +20,7 @@ end
 ```
 
 
-PulsarEx.sync_produce("persistent://public/default/10000.json", "test")
+PulsarEx.produce("persistent://public/default/10000.json", "test")
 
 defmodule TestWorker do
   use PulsarEx.Worker,
