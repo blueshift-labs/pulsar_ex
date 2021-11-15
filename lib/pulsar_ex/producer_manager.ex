@@ -9,7 +9,8 @@ defmodule PulsarEx.ProducerManager do
 
   def get_producer(topic_name, partition, opts \\ []) do
     with [] <- Registry.lookup(ProducerRegistry, {topic_name, partition}),
-         {:ok, pool} <- GenServer.call(__MODULE__, {:create, topic_name, partition, opts}) do
+         {:ok, pool} <-
+           GenServer.call(__MODULE__, {:create, topic_name, partition, opts}, :infinity) do
       {:ok, :poolboy.transaction(pool, & &1)}
     else
       [{pool, _}] ->

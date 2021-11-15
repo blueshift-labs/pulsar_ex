@@ -9,19 +9,23 @@ defmodule PulsarEx.ConsumerManager do
   @refresh_interval 60_000
 
   def start_consumer(topic_name, subscription, module, opts) do
-    GenServer.call(__MODULE__, {:start, topic_name, subscription, module, opts})
+    GenServer.call(__MODULE__, {:start, topic_name, subscription, module, opts}, :infinity)
   end
 
   def start_consumer(topic_name, partitions, subscription, module, opts) do
-    GenServer.call(__MODULE__, {:start, topic_name, partitions, subscription, module, opts})
+    GenServer.call(
+      __MODULE__,
+      {:start, topic_name, partitions, subscription, module, opts},
+      :infinity
+    )
   end
 
   def stop_consumer(topic_name, subscription) do
-    GenServer.call(__MODULE__, {:stop, topic_name, subscription})
+    GenServer.call(__MODULE__, {:stop, topic_name, subscription}, :infinity)
   end
 
   def stop_consumer(topic_name, partitions, subscription) do
-    GenServer.call(__MODULE__, {:stop, topic_name, partitions, subscription})
+    GenServer.call(__MODULE__, {:stop, topic_name, partitions, subscription}, :infinity)
   end
 
   def start_link(auto_start) do

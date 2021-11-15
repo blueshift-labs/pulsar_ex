@@ -67,11 +67,11 @@ defmodule PulsarEx.Connection do
   @ping_interval 45_000
 
   def create_producer(conn, topic, opts \\ []) do
-    GenServer.call(conn, {:create_producer, topic, opts})
+    GenServer.call(conn, {:create_producer, topic, opts}, 60_000)
   end
 
   def subscribe(conn, topic, subscription, sub_type, opts \\ []) do
-    GenServer.call(conn, {:subscribe, topic, subscription, sub_type, opts})
+    GenServer.call(conn, {:subscribe, topic, subscription, sub_type, opts}, 60_000)
   end
 
   def send_message(conn, producer_id, sequence_id, %ProducerMessage{} = message, timeout) do
@@ -83,15 +83,15 @@ defmodule PulsarEx.Connection do
   end
 
   def flow_permits(conn, consumer_id, permits) do
-    GenServer.call(conn, {:flow_permits, consumer_id, permits})
+    GenServer.call(conn, {:flow_permits, consumer_id, permits}, :infinity)
   end
 
   def redeliver(conn, consumer_id, msg_ids) do
-    GenServer.call(conn, {:redeliver, consumer_id, msg_ids})
+    GenServer.call(conn, {:redeliver, consumer_id, msg_ids}, :infinity)
   end
 
   def ack(conn, consumer_id, ack_type, msg_ids) do
-    GenServer.call(conn, {:ack, consumer_id, ack_type, msg_ids})
+    GenServer.call(conn, {:ack, consumer_id, ack_type, msg_ids}, :infinity)
   end
 
   def start_link(%Broker{} = broker) do
