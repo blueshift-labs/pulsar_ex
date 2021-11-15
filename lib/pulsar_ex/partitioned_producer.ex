@@ -60,10 +60,10 @@ defmodule PulsarEx.PartitionedProducer do
   @flush_interval 1000
   @connection_interval 3000
   @max_connection_attempts 10
-  @send_timeout :infinity
+  @send_timeout 300_000
 
   def produce(pid, payload, message_opts) do
-    GenServer.call(pid, {:produce, payload, message_opts}, :infinity)
+    GenServer.call(pid, {:produce, payload, message_opts}, @send_timeout)
   end
 
   def start_link({topic_name, partition, producer_opts}) do

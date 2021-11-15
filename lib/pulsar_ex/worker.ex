@@ -23,7 +23,7 @@ defmodule PulsarEx.Worker do
 
       producer_opts =
         producer_opts
-        |> Keyword.put_new(:send_timeout, :infinity)
+        |> Keyword.put_new(:send_timeout, 300_000)
 
       use PulsarEx.Consumer, opts
       @behaviour PulsarEx.WorkerCallback

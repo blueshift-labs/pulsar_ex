@@ -9,7 +9,8 @@ config :pulsar_ex,
   admin_port: 8080,
   socket_opts: [],
   connection_timeout: 5_000,
-  num_connections: 1
+  num_connections: 1,
+  health_check: false
 
 config :pulsar_ex,
   producer_opts: [
