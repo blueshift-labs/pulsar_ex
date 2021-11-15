@@ -7,11 +7,13 @@ defmodule PulsarEx.ConnectionManager do
 
   use GenServer
 
-  alias PulsarEx.{Broker, Connections, Connection, ConnectionRegistry}
+  alias PulsarEx.{Broker, Connections, Connection, ConnectionRegistry, Admin}
 
   require Logger
 
   @num_connections 1
+
+  @health_check_interval 5000
 
   def get_connection(%Broker{} = broker) do
     with [] <- Registry.lookup(ConnectionRegistry, broker),
@@ -43,9 +45,35 @@ defmodule PulsarEx.ConnectionManager do
   @impl true
   def handle_call({:create, %Broker{} = broker}, _from, state) do
     case start_connection(broker) do
-      {:ok, pool} -> {:reply, {:ok, pool}, state}
-      err -> {:reply, err, state}
+      {:ok, pool} ->
+        {:reply, {:ok, pool}, state}
+
+      err ->
+        {:reply, err, state}
     end
+  end
+
+  @impl true
+  def handle_info({:health_check, %Broker{} = broker, pool}, state) do
+    case Admin.health_check(broker, state.admin_port) do
+      :ok ->
+        Logger.debug("Broker #{Broker.to_name(broker)} is healthy")
+
+        Process.send_after(
+          self(),
+          {:health_check, broker, pool},
+          @health_check_interval + :rand.uniform(@health_check_interval)
+        )
+
+      err ->
+        Logger.error(
+          "Broker #{Broker.to_name(broker)} is not healthy, #{inspect(err)}, stopping..."
+        )
+
+        DynamicSupervisor.terminate_child(Connections, pool)
+    end
+
+    {:noreply, state}
   end
 
   defp start_connection(%Broker{} = broker) do
@@ -63,6 +91,13 @@ defmodule PulsarEx.ConnectionManager do
 
           {:ok, pool} ->
             Logger.debug("Connections started for broker #{Broker.to_name(broker)}")
+
+            Process.send_after(
+              self(),
+              {:health_check, broker, pool},
+              @health_check_interval + :rand.uniform(@health_check_interval)
+            )
+
             {:ok, pool}
 
           {:error, err} ->
