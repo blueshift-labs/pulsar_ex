@@ -12,12 +12,12 @@ defmodule PulsarEx.ConnectionManager do
   require Logger
 
   @num_connections 1
-
   @health_check_interval 5000
+  @connection_timeout 60_000
 
   def get_connection(%Broker{} = broker) do
     with [] <- Registry.lookup(ConnectionRegistry, broker),
-         {:ok, pool} <- GenServer.call(__MODULE__, {:create, broker}, :infinity) do
+         {:ok, pool} <- GenServer.call(__MODULE__, {:create, broker}, @connection_timeout) do
       {:ok, pool}
     else
       [{pool, _}] ->

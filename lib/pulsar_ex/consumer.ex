@@ -114,7 +114,7 @@ defmodule PulsarEx.Consumer do
                                    batch_enabled: true,
                                    batch_size: 100,
                                    flush_interval: 1000,
-                                   send_timeout: :infinity
+                                   send_timeout: 300_000
                                  )
       @max_connection_attempts Keyword.get(opts, :max_connection_attempts, 10)
       @connection_interval 3000
