@@ -57,6 +57,7 @@ defmodule PulsarEx.Connection do
     CommandAckResponse,
     CommandRedeliverUnacknowledgedMessages,
     CommandMessage,
+    CommandActiveConsumerChange,
     MessageIdData
   }
 
@@ -1032,6 +1033,12 @@ defmodule PulsarEx.Connection do
         inspect(response)
       }, after #{duration}ms"
     )
+
+    state
+  end
+
+  defp handle_command(%CommandActiveConsumerChange{}, _, state) do
+    Logger.debug("Consumer status changed")
 
     state
   end
