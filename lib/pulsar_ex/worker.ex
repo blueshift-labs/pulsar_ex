@@ -2,23 +2,22 @@ defmodule PulsarEx.Worker do
   def compile_config(module, opts) do
     {otp_app, opts} = Keyword.pop!(opts, :otp_app)
     opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
-    {topic, opts} = Keyword.pop!(opts, :topic)
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
     {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
     {producer_opts, opts} = Keyword.pop(opts, :producer_opts, [])
-    {otp_app, topic, subscription, jobs, middlewares, producer_opts, opts}
+    {otp_app, subscription, jobs, middlewares, producer_opts, opts}
   end
 
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
-      {otp_app, topic, subscription, jobs, middlewares, producer_opts, opts} =
+      {otp_app, subscription, jobs, middlewares, producer_opts, opts} =
         PulsarEx.Worker.compile_config(__MODULE__, opts)
 
       opts =
         opts
         |> Keyword.merge(batch_size: 1, initial_position: :earliest)
-        |> Keyword.put_new(:dead_letter_topic, topic)
+        |> Keyword.put_new(:dead_letter_topic, :self)
         |> Keyword.put_new(:receiving_queue_size, 10)
 
       producer_opts =
@@ -31,18 +30,13 @@ defmodule PulsarEx.Worker do
       alias PulsarEx.{JobState, ConsumerMessage}
 
       @otp_app otp_app
-      @topic topic
+      @topic Keyword.get(opts, :topic)
       @subscription subscription
       @jobs jobs
       @default_middlewares [PulsarEx.Middlewares.Telemetry, PulsarEx.Middlewares.Logging]
       @middlewares @default_middlewares ++ middlewares
       @producer_opts producer_opts
       @opts opts
-
-      def topic, do: @topic
-      def subscription, do: @subscription
-      def subscription_type, do: @subscription_type
-      def jobs, do: @jobs
 
       defp job_handler() do
         handler = fn %JobState{job: job, payload: payload} = job_state ->
@@ -57,13 +51,13 @@ defmodule PulsarEx.Worker do
       end
 
       @impl true
-      def handle_messages([%ConsumerMessage{properties: properties} = message], _state) do
+      def handle_messages([%ConsumerMessage{properties: properties} = message], state) do
         {job, properties} = Map.pop!(properties, "job")
         payload = Jason.decode!(message.payload)
 
         job_state =
           job_handler().(%JobState{
-            topic: @topic,
+            topic: state.topic_name,
             subscription: @subscription,
             job: String.to_atom(job),
             payload: payload,
@@ -82,13 +76,33 @@ defmodule PulsarEx.Worker do
       end
 
       @impl true
-      def handle_job(job, payload) do
+      def handle_job(_, _) do
         :ok
       end
 
       defoverridable handle_job: 2
 
-      def enqueue_job(job, params, message_opts \\ []) when job in @jobs do
+      defp assert_topic(nil), do: raise "topic undefined"
+      defp assert_topic(topic), do: topic
+
+      @impl true
+      def topic(_, _), do: assert_topic(@topic)
+
+      defoverridable topic: 2
+
+      @impl true
+      def partition_key(_, _), do: nil
+
+      defoverridable partition_key: 2
+
+      def enqueue_job(job, params, message_opts \\ [])
+
+      def enqueue_job(job, params, message_opts) do
+        {topic, message_opts} = Keyword.pop(message_opts, :topic, topic(job, params))
+        enqueue_job(job, params, topic, message_opts)
+      end
+
+      def enqueue_job(job, params, topic, message_opts) when job in @jobs do
         start = System.monotonic_time(:millisecond)
 
         properties =
@@ -98,9 +112,12 @@ defmodule PulsarEx.Worker do
 
         reply =
           PulsarEx.produce(
-            @topic,
+            topic,
             Jason.encode!(params),
-            Keyword.put(message_opts, :properties, properties),
+            Keyword.merge(message_opts, [
+              properties: properties,
+              partition_key: partition_key(job, params), 
+            ]),
             @producer_opts
           )
 
@@ -109,14 +126,14 @@ defmodule PulsarEx.Worker do
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue, :success],
               %{count: 1, duration: System.monotonic_time(:millisecond) - start},
-              %{topic: @topic, job: job}
+              %{topic: topic, job: job}
             )
 
           {:error, _} ->
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue, :error],
               %{count: 1},
-              %{topic: @topic, job: job}
+              %{topic: topic, job: job}
             )
         end
 
@@ -133,11 +150,41 @@ defmodule PulsarEx.Worker do
             Keyword.merge(@opts, opts)
           end
 
-        PulsarEx.start_consumer(@topic, @subscription, __MODULE__, opts)
+        {topic, opts} = Keyword.pop(opts, :topic)
+        {regex, opts} = Keyword.pop(opts, :regex)
+
+        case {topic, regex} do
+          {nil, nil} -> raise "topic undefined"
+
+          {nil, _} ->
+            {tenant, opts} = Keyword.pop!(opts, :tenant)
+            {namespace, opts} = Keyword.pop!(opts, :namespace)
+
+            PulsarEx.start_consumer(tenant, namespace, regex, @subscription, __MODULE__, opts)
+          {_, nil} ->
+
+            PulsarEx.start_consumer(topic, @subscription, __MODULE__, opts)
+        end
       end
 
-      def stop() do
-        PulsarEx.stop_consumer(@topic, @subscription)
+      def stop(opts \\ []) do
+        opts = Keyword.merge(@opts, opts)
+
+        {topic, opts} = Keyword.pop(opts, :topic)
+        {regex, opts} = Keyword.pop(opts, :regex)
+
+        case {topic, regex} do
+          {nil, nil} -> raise "topic undefined"
+
+          {nil, _} ->
+            {tenant, opts} = Keyword.pop!(opts, :tenant)
+            {namespace, opts} = Keyword.pop!(opts, :namespace)
+
+            PulsarEx.stop_consumer(tenant, namespace, regex, @subscription)
+          {_, nil} ->
+
+            PulsarEx.stop_consumer(topic, @subscription)
+        end
       end
     end
   end
