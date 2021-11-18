@@ -1,18 +1,44 @@
 defmodule PulsarEx.ConsumerManager do
+  defmodule State do
+    @enforce_keys [
+      :brokers,
+      :admin_port,
+      :refs
+    ]
+
+    defstruct [
+      :brokers,
+      :admin_port,
+      :refs
+    ]
+  end
+
   use GenServer
 
   require Logger
 
-  alias PulsarEx.{Consumers, ConsumerRegistry, PartitionManager, Topic}
+  alias PulsarEx.{Consumers, ConsumerRegistry, PartitionManager, Topic, Admin}
 
   @num_consumers 1
   @refresh_interval 60_000
   @connection_timeout 60_000
 
+  def start_consumer(tenant, namespace, %Regex{} = regex, subscription, module, opts) do
+    GenServer.call(
+      __MODULE__,
+      {:start, tenant, namespace, regex, subscription, module, opts},
+      @connection_timeout
+    )
+  end
+
+  def start_consumer(tenant, namespace, regex, subscription, module, opts) do
+    start_consumer(tenant, namespace, Regex.compile!(regex), subscription, module, opts)
+  end
+
   def start_consumer(topic_name, subscription, module, opts) do
     GenServer.call(
       __MODULE__,
-      {:start, topic_name, subscription, module, opts},
+      {:start, topic_name, nil, subscription, module, opts},
       @connection_timeout
     )
   end
@@ -25,68 +51,98 @@ defmodule PulsarEx.ConsumerManager do
     )
   end
 
+  def stop_consumer(tenant, namespace, regex, subscription) do
+    GenServer.call(__MODULE__, {:stop, tenant, namespace, regex, subscription})
+  end
+
   def stop_consumer(topic_name, subscription) do
-    GenServer.call(__MODULE__, {:stop, topic_name, subscription})
+    GenServer.call(__MODULE__, {:stop, topic_name, nil, subscription})
   end
 
   def stop_consumer(topic_name, partitions, subscription) do
     GenServer.call(__MODULE__, {:stop, topic_name, partitions, subscription})
   end
 
-  def start_link(auto_start) do
-    GenServer.start_link(__MODULE__, auto_start, name: __MODULE__)
+  def start_link(_) do
+    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
   end
 
   @impl true
-  def init(false) do
+  def init(_) do
     Logger.debug("Starting consumer manager")
-    Process.flag(:trap_exit, true)
-    {:ok, %{}}
-  end
 
-  @impl true
-  def init(true) do
-    Logger.debug("Starting consumer manager")
+    brokers = Application.fetch_env!(:pulsar_ex, :brokers)
+    admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
+
     Process.flag(:trap_exit, true)
 
     Application.get_env(:pulsar_ex, :consumers, [])
-    |> Enum.reduce_while({:ok, %{}}, fn opts, {:ok, refs} ->
-      topic_name = Keyword.fetch!(opts, :topic)
-      partitions = Keyword.get(opts, :partitions, nil)
+    |> Enum.each(fn opts ->
       subscription = Keyword.fetch!(opts, :subscription)
       module = Keyword.fetch!(opts, :module)
-      consumer_opts = consumer_opts(opts)
-      refresh_interval = Keyword.get(consumer_opts, :refresh_interval, @refresh_interval)
-      auto_refresh = Keyword.get(consumer_opts, :auto_refresh, true)
 
-      case do_start_consumers(topic_name, partitions, subscription, module, consumer_opts) do
+      case Keyword.get(opts, :regex) do
         nil ->
-          if partitions == nil && auto_refresh do
-            ref =
-              Process.send_after(
-                self(),
-                {:refresh, topic_name, subscription, module, opts},
-                refresh_interval + :rand.uniform(refresh_interval)
-              )
+          topic_name = Keyword.fetch!(opts, :topic)
+          partitions = Keyword.get(opts, :partitions, nil)
+          Process.send(self(), {:start, topic_name, partitions, subscription, module, opts}, [])
 
-            {:cont, {:ok, Map.put(refs, {topic_name, subscription}, ref)}}
-          else
-            {:cont, {:ok, refs}}
-          end
+        regex ->
+          tenant = Keyword.fetch!(opts, :tenant)
+          namespace = Keyword.fetch!(opts, :namespace)
+          regex = Regex.compile!(regex)
 
-        err ->
-          {:halt, err}
+          Process.send(self(), {:start, tenant, namespace, regex, subscription, module, opts}, [])
       end
     end)
-    |> case do
-      {:ok, state} -> {:ok, state}
-      err -> {:stop, err}
+
+    {:ok, %State{brokers: brokers, admin_port: admin_port, refs: %{}}}
+  end
+
+  @impl true
+  def handle_call(
+        {:start, tenant, namespace, regex, subscription, module, opts},
+        _from,
+        state
+      ) do
+    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, regex) do
+      {:ok, topic_names} ->
+        consumer_opts = consumer_opts(opts)
+        auto_refresh = Keyword.get(consumer_opts, :auto_refresh, true)
+        refresh_interval = Keyword.get(consumer_opts, :refresh_interval, @refresh_interval)
+
+        case do_start_consumers(topic_names, subscription, module, consumer_opts) do
+          nil ->
+            if auto_refresh do
+              ref =
+                Process.send_after(
+                  self(),
+                  {:refresh, tenant, namespace, regex, subscription, module, opts},
+                  refresh_interval + :rand.uniform(refresh_interval)
+                )
+
+              {:reply, :ok,
+               %State{
+                 state
+                 | refs: Map.put(state.refs, {tenant, namespace, regex, subscription}, ref)
+               }}
+            else
+              {:reply, :ok, state}
+            end
+
+          {:error, _} = err ->
+            {:reply, err, state}
+        end
+
+      {:error, err} ->
+        Logger.error("Error discovering topics for #{tenant}/#{namespace}, #{inspect(err)}")
+        {:reply, {:error, err}, state}
     end
   end
 
   @impl true
   def handle_call(
-        {:start, topic_name, subscription, module, opts},
+        {:start, topic_name, nil, subscription, module, opts},
         _from,
         state
       ) do
@@ -104,7 +160,8 @@ defmodule PulsarEx.ConsumerManager do
               refresh_interval + :rand.uniform(refresh_interval)
             )
 
-          {:reply, :ok, Map.put(state, {topic_name, subscription}, ref)}
+          {:reply, :ok,
+           %State{state | refs: Map.put(state.refs, {topic_name, subscription}, ref)}}
         else
           {:reply, :ok, state}
         end
@@ -130,20 +187,41 @@ defmodule PulsarEx.ConsumerManager do
   end
 
   @impl true
-  def handle_call({:stop, topic_name, partitions, subscription}, _from, state) do
-    do_stop_consumers(topic_name, partitions, subscription)
-    {:reply, :ok, state}
+  def handle_call({:stop, tenant, namespace, regex, subscription}, _from, state) do
+    {ref, refs} = Map.pop(state.refs, {tenant, namespace, regex, subscription})
+
+    if ref != nil do
+      Process.cancel_timer(ref)
+    end
+
+    state = %State{state | refs: refs}
+
+    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, regex) do
+      {:ok, topic_names} ->
+        do_stop_consumers(topic_names, subscription)
+        {:reply, :ok, state}
+
+      {:error, err} ->
+        Logger.error("Error discovering topics for #{tenant}/#{namespace}, #{inspect(err)}")
+        {:reply, {:error, err}, state}
+    end
   end
 
   @impl true
-  def handle_call({:stop, topic_name, subscription}, _from, state) do
-    {ref, state} = Map.pop(state, {topic_name, subscription})
+  def handle_call({:stop, topic_name, nil, subscription}, _from, state) do
+    {ref, refs} = Map.pop(state.refs, {topic_name, subscription})
 
     if ref != nil do
       Process.cancel_timer(ref)
     end
 
     do_stop_consumers(topic_name, nil, subscription)
+    {:reply, :ok, %State{state | refs: refs}}
+  end
+
+  @impl true
+  def handle_call({:stop, topic_name, partitions, subscription}, _from, state) do
+    do_stop_consumers(topic_name, partitions, subscription)
     {:reply, :ok, state}
   end
 
@@ -160,7 +238,31 @@ defmodule PulsarEx.ConsumerManager do
         refresh_interval + :rand.uniform(refresh_interval)
       )
 
-    {:noreply, Map.put(state, {topic_name, subscription}, ref)}
+    {:noreply, %State{state | refs: Map.put(state.refs, {topic_name, subscription}, ref)}}
+  end
+
+  @impl true
+  def handle_info({:refresh, tenant, namespace, regex, subscription, module, opts}, state) do
+    consumer_opts = consumer_opts(opts)
+    refresh_interval = Keyword.get(consumer_opts, :refresh_interval, @refresh_interval)
+
+    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, regex) do
+      {:ok, topic_names} ->
+        do_start_consumers(topic_names, subscription, module, consumer_opts)
+
+      {:error, err} ->
+        Logger.error("Error discovering topics for #{tenant}/#{namespace}, #{inspect(err)}")
+    end
+
+    ref =
+      Process.send_after(
+        self(),
+        {:refresh, tenant, namespace, regex, subscription, module, opts},
+        refresh_interval + :rand.uniform(refresh_interval)
+      )
+
+    {:noreply,
+     %State{state | refs: Map.put(state.refs, {tenant, namespace, regex, subscription}, ref)}}
   end
 
   @impl true
@@ -245,6 +347,13 @@ defmodule PulsarEx.ConsumerManager do
     end
   end
 
+  defp do_start_consumers(topic_names, subscription, module, consumer_opts) do
+    topic_names
+    |> Enum.reduce(nil, fn topic_name, err ->
+      err || do_start_consumers(topic_name, nil, subscription, module, consumer_opts)
+    end)
+  end
+
   defp do_start_consumers(topic_name, nil, subscription, module, consumer_opts) do
     with {:ok, {%Topic{}, partitions}} <- PartitionManager.lookup(topic_name) do
       partitions = if partitions > 0, do: 0..(partitions - 1), else: [nil]
@@ -268,6 +377,13 @@ defmodule PulsarEx.ConsumerManager do
       [] -> :ok
       [{consumer, _}] -> DynamicSupervisor.terminate_child(Consumers, consumer)
     end
+  end
+
+  defp do_stop_consumers(topic_names, subscription) do
+    topic_names
+    |> Enum.each(fn topic_name ->
+      do_stop_consumers(topic_name, nil, subscription)
+    end)
   end
 
   defp do_stop_consumers(topic_name, nil, subscription) do

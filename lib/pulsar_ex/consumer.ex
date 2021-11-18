@@ -113,7 +113,7 @@ defmodule PulsarEx.Consumer do
       @dead_letter_producer_opts Keyword.get(opts, :dead_letter_producer_opts,
                                    batch_enabled: true,
                                    batch_size: 100,
-                                   flush_interval: 1000,
+                                   flush_interval: 100,
                                    send_timeout: 300_000
                                  )
       @max_connection_attempts Keyword.get(opts, :max_connection_attempts, 10)
@@ -190,7 +190,13 @@ defmodule PulsarEx.Consumer do
           max(Keyword.get(consumer_opts, :max_redelivery_attempts, @max_redelivery_attempts), 1)
 
         redelivery_policy = Keyword.get(consumer_opts, :redelivery_policy, @redelivery_policy)
-        dead_letter_topic = Keyword.get(consumer_opts, :dead_letter_topic, @dead_letter_topic)
+
+        dead_letter_topic =
+          case Keyword.get(consumer_opts, :dead_letter_topic, @dead_letter_topic) do
+            :self -> topic_name
+            other -> other
+          end
+
         poll_interval = max(Keyword.get(consumer_opts, :poll_interval, @poll_interval), 10)
 
         ack_interval = max(Keyword.get(consumer_opts, :ack_interval, @ack_interval), 1_000)

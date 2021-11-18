@@ -7,5 +7,7 @@ defmodule PulsarEx.ConsumerCallback do
 end
 
 defmodule PulsarEx.WorkerCallback do
-  @callback handle_job(job :: atom(), payload :: any()) :: :ok | {:ok, term()} | {:error, term()}
+  @callback topic(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
+  @callback partition_key(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
+  @callback handle_job(job :: atom(), params :: any()) :: :ok | {:ok, term()} | {:error, term()}
 end

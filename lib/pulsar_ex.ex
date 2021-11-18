@@ -31,10 +31,15 @@ defmodule PulsarEx do
     end
   end
 
+  defdelegate start_consumer(tenant, namespace, regex, subscription, module, opts),
+    to: ConsumerManager
+
   defdelegate start_consumer(topic_name, subscription, module, opts), to: ConsumerManager
 
   defdelegate start_consumer(topic_name, partitions, subscription, module, opts),
     to: ConsumerManager
+
+  defdelegate stop_consumer(tenant, namespace, regex, subscription), to: ConsumerManager
 
   defdelegate stop_consumer(topic_name, subscription), to: ConsumerManager
   defdelegate stop_consumer(topic_name, partitions, subscription), to: ConsumerManager

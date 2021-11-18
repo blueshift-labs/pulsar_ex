@@ -11,13 +11,10 @@ defmodule PulsarEx.ConsumerSupervisor do
 
   @impl true
   def init(:init) do
-    consumer_opts = Application.get_env(:pulsar_ex, :consumer_opts, [])
-    auto_start = Keyword.get(consumer_opts, :auto_start, true)
-
     children = [
       {Registry, keys: :unique, name: ConsumerRegistry},
       {DynamicSupervisor, strategy: :one_for_one, max_restarts: @max_restarts, name: Consumers},
-      {ConsumerManager, auto_start}
+      ConsumerManager
     ]
 
     Supervisor.init(children, strategy: :one_for_all)
