@@ -38,6 +38,12 @@ defmodule PulsarEx.Worker do
       @producer_opts producer_opts
       @opts opts
 
+      if @topic do
+        def topic(), do: @topic
+      else
+        def topic(), do: raise("Topic is not defined for #{__MODULE__}")
+      end
+
       defp job_handler() do
         handler = fn %JobState{job: job, payload: payload} = job_state ->
           %JobState{job_state | state: handle_job(job, payload)}
