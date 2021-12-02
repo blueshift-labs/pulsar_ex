@@ -5,8 +5,11 @@ defmodule PulsarEx do
     PartitionedProducer,
     Partitioner,
     Topic,
-    ConsumerManager
+    ConsumerManager,
+    ProducerImpl
   }
+
+  @producer_module Application.get_env(:pulsar_ex, :producer_module, ProducerImpl)
 
   def produce(topic_name, payload, message_opts \\ [], producer_opts \\ [])
 
@@ -16,18 +19,28 @@ defmodule PulsarEx do
   end
 
   def produce(topic_name, payload, message_opts, producer_opts) do
-    with {:ok, {%Topic{partition: nil}, partitions}} <- PartitionManager.lookup(topic_name) do
-      partition =
-        message_opts
-        |> Keyword.get(:partition_key)
-        |> Partitioner.assign(partitions)
+    @producer_module.produce(topic_name, payload, message_opts, producer_opts)
+  end
 
-      with {:ok, producer} <- ProducerManager.get_producer(topic_name, partition, producer_opts) do
-        PartitionedProducer.produce(producer, payload, message_opts)
+  defmodule ProducerImpl do
+    alias PulsarEx.ProducerCallback
+    @behaviour ProducerCallback
+
+    @impl true
+    def produce(topic_name, payload, message_opts, producer_opts) do
+      with {:ok, {%Topic{partition: nil}, partitions}} <- PartitionManager.lookup(topic_name) do
+        partition =
+          message_opts
+          |> Keyword.get(:partition_key)
+          |> Partitioner.assign(partitions)
+
+        with {:ok, producer} <- ProducerManager.get_producer(topic_name, partition, producer_opts) do
+          PartitionedProducer.produce(producer, payload, message_opts)
+        end
+      else
+        {:ok, {%Topic{}, _}} -> {:error, :partitioned_topic}
+        err -> err
       end
-    else
-      {:ok, {%Topic{}, _}} -> {:error, :partitioned_topic}
-      err -> err
     end
   end
 
