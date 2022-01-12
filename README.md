@@ -29,9 +29,9 @@ defmodule TestWorker do
     subscription: "test",
     jobs: [:backfill_account, :backfill_partition, :backfill_collection, :backfill_user]
 
-  def handle_job(job, params) do
+  def handle_job(job, job_state) do
     IO.inspect(job)
-    IO.inspect(params)
+    IO.inspect(job_state)
     :ok
   end
 end

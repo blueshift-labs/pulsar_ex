@@ -45,8 +45,8 @@ defmodule PulsarEx.Worker do
       end
 
       defp job_handler() do
-        handler = fn %JobState{job: job, payload: payload} = job_state ->
-          %JobState{job_state | state: handle_job(job, payload)}
+        handler = fn %JobState{job: job} = job_state ->
+          %JobState{job_state | state: handle_job(job, job_state)}
         end
 
         @middlewares
