@@ -53,14 +53,14 @@ defmodule PulsarEx.Middlewares.Logging do
   @impl true
   def call(handler) do
     fn %JobState{job: job} = job_state ->
-      start = System.monotonic_time(:millisecond)
+      start = System.monotonic_time()
       Logger.debug("start processing job #{job}")
 
       Logger.debug("processing job #{job} with payload", payload: job_state.payload)
 
       job_state = handler.(job_state)
 
-      duration = System.monotonic_time(:millisecond) - start
+      duration = System.monotonic_time() - start
 
       case job_state.state do
         :ok ->
@@ -91,7 +91,7 @@ defmodule PulsarEx.Middlewares.Telemetry do
   @impl true
   def call(handler) do
     fn %JobState{job: job, topic: topic, subscription: subscription} = job_state ->
-      start = System.monotonic_time(:millisecond)
+      start = System.monotonic_time()
       metadata = %{job: job, topic: topic, subscription: subscription}
       job_state = handler.(job_state)
 
@@ -99,14 +99,14 @@ defmodule PulsarEx.Middlewares.Telemetry do
         %JobState{state: :ok} ->
           :telemetry.execute(
             [:pulsar_ex, :worker, :handle_job, :success],
-            %{count: 1, duration: System.monotonic_time(:millisecond) - start},
+            %{count: 1, duration: System.monotonic_time() - start},
             metadata
           )
 
         %JobState{state: {:ok, _}} ->
           :telemetry.execute(
             [:pulsar_ex, :worker, :handle_job, :success],
-            %{count: 1, duration: System.monotonic_time(:millisecond) - start},
+            %{count: 1, duration: System.monotonic_time() - start},
             metadata
           )
 

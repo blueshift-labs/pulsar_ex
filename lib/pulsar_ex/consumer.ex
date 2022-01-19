@@ -389,7 +389,7 @@ defmodule PulsarEx.Consumer do
             {:noreply, state}
 
           true ->
-            start = System.monotonic_time(:millisecond)
+            start = System.monotonic_time()
 
             {available_acks, batch_sizes} =
               Enum.map(available_acks, fn {{ledgerId, entryId}, {true, batch_size}} ->
@@ -412,7 +412,7 @@ defmodule PulsarEx.Consumer do
                   %{
                     count: 1,
                     acks: total_acks,
-                    duration: System.monotonic_time(:millisecond) - start
+                    duration: System.monotonic_time() - start
                   },
                   state.metadata
                 )
@@ -465,7 +465,7 @@ defmodule PulsarEx.Consumer do
             {:noreply, state}
 
           true ->
-            start = System.monotonic_time(:millisecond)
+            start = System.monotonic_time()
 
             {available_nacks, batch_sizes} =
               Enum.map(available_nacks, fn {{ledgerId, entryId}, {false, _, batch_size}} ->
@@ -488,7 +488,7 @@ defmodule PulsarEx.Consumer do
                   %{
                     count: 1,
                     nacks: total_nacks,
-                    duration: System.monotonic_time(:millisecond) - start
+                    duration: System.monotonic_time() - start
                   },
                   state.metadata
                 )
@@ -616,7 +616,7 @@ defmodule PulsarEx.Consumer do
       end
 
       defp handle_flow_permits(state) do
-        start = System.monotonic_time(:millisecond)
+        start = System.monotonic_time()
 
         case Connection.flow_permits(state.connection, state.consumer_id, state.permits) do
           :ok ->
@@ -631,7 +631,7 @@ defmodule PulsarEx.Consumer do
               %{
                 count: 1,
                 permits: state.permits,
-                duration: System.monotonic_time(:millisecond) - start
+                duration: System.monotonic_time() - start
               },
               state.metadata
             )

@@ -111,7 +111,7 @@ defmodule PulsarEx.Worker do
       end
 
       def enqueue_job(job, params, topic, message_opts) when job in @jobs do
-        start = System.monotonic_time(:millisecond)
+        start = System.monotonic_time()
 
         properties =
           Keyword.get(message_opts, :properties, [])
@@ -133,7 +133,7 @@ defmodule PulsarEx.Worker do
           {:ok, _} ->
             :telemetry.execute(
               [:pulsar_ex, :worker, :enqueue, :success],
-              %{count: 1, duration: System.monotonic_time(:millisecond) - start},
+              %{count: 1, duration: System.monotonic_time() - start},
               %{topic: topic, job: job}
             )
 

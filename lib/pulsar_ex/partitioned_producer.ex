@@ -282,7 +282,7 @@ defmodule PulsarEx.PartitionedProducer do
   def handle_call({:produce, payload, message_opts}, _from, state) do
     state = flush_queue(state, true)
 
-    start = System.monotonic_time(:millisecond)
+    start = System.monotonic_time()
 
     {%{sequence_id: sequence_id} = message, state} = create_message(payload, message_opts, state)
 
@@ -299,7 +299,7 @@ defmodule PulsarEx.PartitionedProducer do
       {:ok, _} ->
         :telemetry.execute(
           [:pulsar_ex, :producer, :send, :success],
-          %{count: 1, duration: System.monotonic_time(:millisecond) - start},
+          %{count: 1, duration: System.monotonic_time() - start},
           state.metadata
         )
 
@@ -416,7 +416,7 @@ defmodule PulsarEx.PartitionedProducer do
         state
 
       [{%{sequence_id: sequence_id} = message, from}] ->
-        start = System.monotonic_time(:millisecond)
+        start = System.monotonic_time()
 
         reply =
           Connection.send_message(
@@ -431,7 +431,7 @@ defmodule PulsarEx.PartitionedProducer do
           {:ok, _} ->
             :telemetry.execute(
               [:pulsar_ex, :producer, :send, :success],
-              %{count: 1, duration: System.monotonic_time(:millisecond) - start},
+              %{count: 1, duration: System.monotonic_time() - start},
               state.metadata
             )
 
@@ -450,7 +450,7 @@ defmodule PulsarEx.PartitionedProducer do
       _ ->
         {[%{sequence_id: sequence_id} | _] = messages, froms} = Enum.unzip(batch)
 
-        start = System.monotonic_time(:millisecond)
+        start = System.monotonic_time()
 
         reply =
           Connection.send_messages(
@@ -465,7 +465,7 @@ defmodule PulsarEx.PartitionedProducer do
           {:ok, _} ->
             :telemetry.execute(
               [:pulsar_ex, :producer, :send, :success],
-              %{count: length(messages), duration: System.monotonic_time(:millisecond) - start},
+              %{count: length(messages), duration: System.monotonic_time() - start},
               state.metadata
             )
 

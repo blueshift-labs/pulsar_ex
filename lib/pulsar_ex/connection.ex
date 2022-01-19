@@ -140,7 +140,7 @@ defmodule PulsarEx.Connection do
        %{
          state
          | socket: socket,
-           last_server_ts: System.monotonic_time(:millisecond),
+           last_server_ts: System.monotonic_time(),
            max_message_size: max_message_size
        }}
     else
@@ -265,7 +265,7 @@ defmodule PulsarEx.Connection do
           Map.put(
             state.requests,
             {:request_id, request.request_id},
-            {from, System.monotonic_time(:millisecond), request}
+            {from, System.monotonic_time(), request}
           )
 
         {:noreply, %{state | requests: requests}}
@@ -344,7 +344,7 @@ defmodule PulsarEx.Connection do
           Map.put(
             state.requests,
             {:request_id, request.request_id},
-            {from, System.monotonic_time(:millisecond), request}
+            {from, System.monotonic_time(), request}
           )
 
         {:noreply, %{state | requests: requests}}
@@ -471,7 +471,7 @@ defmodule PulsarEx.Connection do
           Map.put(
             state.requests,
             {:request_id, request.request_id},
-            {nil, System.monotonic_time(:millisecond), request}
+            {nil, System.monotonic_time(), request}
           )
 
         {:reply, :ok, %{state | requests: requests}}
@@ -508,7 +508,7 @@ defmodule PulsarEx.Connection do
           Map.put(
             state.requests,
             {:sequence_id, producer_id, sequence_id},
-            {from, System.monotonic_time(:millisecond), request}
+            {from, System.monotonic_time(), request}
           )
 
         {:noreply, %{state | requests: requests}}
@@ -540,7 +540,7 @@ defmodule PulsarEx.Connection do
           Map.put(
             state.requests,
             {:sequence_id, producer_id, sequence_id},
-            {from, System.monotonic_time(:millisecond), request}
+            {from, System.monotonic_time(), request}
           )
 
         {:noreply, %{state | requests: requests}}
@@ -606,7 +606,7 @@ defmodule PulsarEx.Connection do
     end)
 
     :inet.setopts(socket, active: :once)
-    {:noreply, %{state | buffer: buffer, last_server_ts: System.monotonic_time(:millisecond)}}
+    {:noreply, %{state | buffer: buffer, last_server_ts: System.monotonic_time()}}
   end
 
   @impl true
@@ -614,7 +614,8 @@ defmodule PulsarEx.Connection do
     Logger.debug("Sending Ping to broker #{state.broker_name}")
 
     cond do
-      System.monotonic_time(:millisecond) - state.last_server_ts > 2 * @ping_interval ->
+      System.monotonic_time() - state.last_server_ts >
+          2 * System.convert_time_unit(@ping_interval, :millisecond, :native) ->
         {:disconnect, {:error, :closed}, state}
 
       true ->
@@ -673,7 +674,7 @@ defmodule PulsarEx.Connection do
               Map.put(
                 state.requests,
                 {:request_id, request.request_id},
-                {nil, System.monotonic_time(:millisecond), request}
+                {nil, System.monotonic_time(), request}
               )
 
             {:noreply, %{state | requests: requests}}
@@ -710,7 +711,7 @@ defmodule PulsarEx.Connection do
               Map.put(
                 state.requests,
                 {:request_id, request.request_id},
-                {nil, System.monotonic_time(:millisecond), request}
+                {nil, System.monotonic_time(), request}
               )
 
             {:noreply, %{state | requests: requests}}
@@ -786,7 +787,7 @@ defmodule PulsarEx.Connection do
   defp handle_command(%CommandProducerSuccess{producer_ready: true} = response, _, state) do
     {{pid, _} = from, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
 
-    duration = System.monotonic_time(:millisecond) - ts
+    duration = System.monotonic_time() - ts
 
     Logger.debug(
       "Created producer #{request.producer_id} on broker #{state.broker_name} after #{duration}ms"
@@ -820,7 +821,7 @@ defmodule PulsarEx.Connection do
   defp handle_command(%CommandProducerSuccess{} = response, _, state) do
     {_, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
 
-    duration = System.monotonic_time(:millisecond) - ts
+    duration = System.monotonic_time() - ts
 
     Logger.warn(
       "Producer #{request.producer_id} not ready on broker #{state.broker_name}, after #{duration}ms"
@@ -835,7 +836,7 @@ defmodule PulsarEx.Connection do
 
     case request_info do
       {{pid, _} = from, ts, %CommandSubscribe{} = request} ->
-        duration = System.monotonic_time(:millisecond) - ts
+        duration = System.monotonic_time() - ts
 
         Logger.debug(
           "Subscribed consumer #{request.consumer_id} on broker #{state.broker_name}, after #{
@@ -867,7 +868,7 @@ defmodule PulsarEx.Connection do
         %{state | consumers: consumers}
 
       {nil, ts, %CommandCloseProducer{producer_id: producer_id}} ->
-        duration = System.monotonic_time(:millisecond) - ts
+        duration = System.monotonic_time() - ts
 
         Logger.debug(
           "Stopped producer #{producer_id} from broker #{state.broker_name}, after #{duration}ms"
@@ -876,7 +877,7 @@ defmodule PulsarEx.Connection do
         state
 
       {nil, ts, %CommandCloseConsumer{consumer_id: consumer_id}} ->
-        duration = System.monotonic_time(:millisecond) - ts
+        duration = System.monotonic_time() - ts
 
         Logger.debug(
           "Stopped consumer #{consumer_id} from broker #{state.broker_name}, after #{duration}ms"
@@ -892,7 +893,7 @@ defmodule PulsarEx.Connection do
 
     case request_info do
       {from, ts, %CommandProducer{} = request} ->
-        duration = System.monotonic_time(:millisecond) - ts
+        duration = System.monotonic_time() - ts
 
         Logger.error(
           "Error connecting producer #{request.producer_id} on broker #{state.broker_name}, after #{
@@ -911,7 +912,7 @@ defmodule PulsarEx.Connection do
         state
 
       {from, ts, %CommandSubscribe{} = request} ->
-        duration = System.monotonic_time(:millisecond) - ts
+        duration = System.monotonic_time() - ts
 
         Logger.error(
           "Error subscribing to topic #{request.topic} for consumer #{request.consumer_id} on broker #{
@@ -930,7 +931,7 @@ defmodule PulsarEx.Connection do
         state
 
       {nil, ts, %CommandCloseProducer{producer_id: producer_id}} ->
-        duration = System.monotonic_time(:millisecond) - ts
+        duration = System.monotonic_time() - ts
 
         Logger.error(
           "Error stopping producer #{producer_id} from broker #{state.broker_name}, after #{
@@ -941,7 +942,7 @@ defmodule PulsarEx.Connection do
         state
 
       {nil, ts, %CommandCloseConsumer{consumer_id: consumer_id}} ->
-        duration = System.monotonic_time(:millisecond) - ts
+        duration = System.monotonic_time() - ts
 
         Logger.error(
           "Error stopping consumer #{consumer_id} from broker #{state.broker_name}, after #{
@@ -959,7 +960,7 @@ defmodule PulsarEx.Connection do
 
     state = %{state | requests: requests}
 
-    duration = System.monotonic_time(:millisecond) - ts
+    duration = System.monotonic_time() - ts
 
     Logger.debug(
       "Received Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, after #{
@@ -984,7 +985,7 @@ defmodule PulsarEx.Connection do
 
     state = %{state | requests: requests}
 
-    duration = System.monotonic_time(:millisecond) - ts
+    duration = System.monotonic_time() - ts
 
     Logger.error(
       "Received Send Error from broker #{state.broker_name} for producer #{response.producer_id}, #{
@@ -1011,7 +1012,7 @@ defmodule PulsarEx.Connection do
     {{nil, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
-    duration = System.monotonic_time(:millisecond) - ts
+    duration = System.monotonic_time() - ts
 
     Logger.debug(
       "Received Ack Response from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
@@ -1026,7 +1027,7 @@ defmodule PulsarEx.Connection do
     {{nil, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
-    duration = System.monotonic_time(:millisecond) - ts
+    duration = System.monotonic_time() - ts
 
     Logger.error(
       "Received Ack Error from broker #{state.broker_name} for consumer #{request.consumer_id}, #{
