@@ -20,10 +20,6 @@ defmodule PulsarEx.Worker do
         |> Keyword.put_new(:dead_letter_topic, :self)
         |> Keyword.put_new(:receiving_queue_size, 10)
 
-      producer_opts =
-        producer_opts
-        |> Keyword.put_new(:send_timeout, 300_000)
-
       use PulsarEx.Consumer, opts
       @behaviour PulsarEx.WorkerCallback
 
@@ -43,6 +39,8 @@ defmodule PulsarEx.Worker do
       else
         def topic(), do: raise("Topic is not defined for #{__MODULE__}")
       end
+
+      def producer_opts(), do: @producer_opts
 
       defp job_handler() do
         handler = fn %JobState{job: job} = job_state ->

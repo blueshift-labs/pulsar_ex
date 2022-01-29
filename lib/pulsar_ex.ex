@@ -34,7 +34,8 @@ defmodule PulsarEx do
           |> Partitioner.assign(partitions)
 
         with {:ok, producer} <- ProducerManager.get_producer(topic_name, partition, producer_opts) do
-          PartitionedProducer.produce(producer, payload, message_opts)
+          send_timeout = Keyword.get(producer_opts, :send_timeout, :infinity)
+          PartitionedProducer.produce(producer, payload, message_opts, send_timeout)
         end
       else
         {:ok, {%Topic{}, _}} -> {:error, :partitioned_topic}
