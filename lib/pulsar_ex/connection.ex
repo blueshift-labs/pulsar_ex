@@ -436,7 +436,7 @@ defmodule PulsarEx.Connection do
   end
 
   @impl true
-  def handle_call({:ack, consumer_id, ack_type, msg_ids}, _from, state)
+  def handle_call({:ack, consumer_id, ack_type, msg_ids}, from, state)
       when is_list(msg_ids) do
     Logger.debug(
       "Sending #{length(msg_ids)} acks to broker #{state.broker_name} for consumer #{consumer_id}"
@@ -471,7 +471,7 @@ defmodule PulsarEx.Connection do
           Map.put(
             state.requests,
             {:request_id, request.request_id},
-            {nil, System.monotonic_time(), request}
+            {from, System.monotonic_time(), request}
           )
 
         {:reply, :ok, %{state | requests: requests}}
@@ -1009,7 +1009,7 @@ defmodule PulsarEx.Connection do
          _,
          state
        ) do
-    {{nil, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
+    {{{pid, _}, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
     duration = System.monotonic_time() - ts
@@ -1020,11 +1020,19 @@ defmodule PulsarEx.Connection do
       }ms, #{inspect(response)}"
     )
 
+    message_ids =
+      request.message_id
+      |> Enum.map(fn %{ledgerId: ledgerId, entryId: entryId} ->
+        {ledgerId, entryId}
+      end)
+
+    GenServer.cast(pid, {:ack_response, message_ids})
+
     state
   end
 
   defp handle_command(%CommandAckResponse{request_id: request_id} = response, _, state) do
-    {{nil, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
+    {{_, ts, request}, requests} = Map.pop(state.requests, {:request_id, request_id})
     state = %{state | requests: requests}
 
     duration = System.monotonic_time() - ts
