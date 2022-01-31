@@ -76,12 +76,12 @@ defmodule PulsarEx.Connection do
     GenServer.call(conn, {:subscribe, topic, subscription, sub_type, opts}, @request_timeout)
   end
 
-  def send_message(conn, producer_id, sequence_id, %ProducerMessage{} = message, timeout) do
-    GenServer.call(conn, {:send, producer_id, sequence_id, message}, timeout)
+  def send_message(conn, producer_id, sequence_id, %ProducerMessage{} = message) do
+    GenServer.call(conn, {:send, producer_id, sequence_id, message}, @request_timeout)
   end
 
-  def send_messages(conn, producer_id, sequence_id, messages, timeout) when is_list(messages) do
-    GenServer.call(conn, {:send, producer_id, sequence_id, messages}, timeout)
+  def send_messages(conn, producer_id, sequence_id, messages) when is_list(messages) do
+    GenServer.call(conn, {:send, producer_id, sequence_id, messages}, @request_timeout)
   end
 
   def flow_permits(conn, consumer_id, permits) do
@@ -511,7 +511,7 @@ defmodule PulsarEx.Connection do
             {from, System.monotonic_time(), request}
           )
 
-        {:noreply, %{state | requests: requests}}
+        {:reply, :ok, %{state | requests: requests}}
 
       {:error, _} = err ->
         :telemetry.execute(
@@ -543,7 +543,7 @@ defmodule PulsarEx.Connection do
             {from, System.monotonic_time(), request}
           )
 
-        {:noreply, %{state | requests: requests}}
+        {:reply, :ok, %{state | requests: requests}}
 
       {:error, _} = err ->
         :telemetry.execute(
@@ -955,7 +955,7 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%CommandSendReceipt{} = response, _, state) do
-    {{from, ts, _}, requests} =
+    {{{pid, _}, ts, _}, requests} =
       Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
 
     state = %{state | requests: requests}
@@ -968,7 +968,7 @@ defmodule PulsarEx.Connection do
       }ms"
     )
 
-    GenServer.reply(from, {:ok, response.message_id})
+    GenServer.cast(pid, {:send_response, {response.sequence_id, {:ok, response.message_id}}})
 
     :telemetry.execute(
       [:pulsar_ex, :connection, :send, :success],
@@ -980,7 +980,7 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%CommandSendError{error: err} = response, _, state) do
-    {{from, ts, _}, requests} =
+    {{{pid, _}, ts, _}, requests} =
       Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
 
     state = %{state | requests: requests}
@@ -993,7 +993,7 @@ defmodule PulsarEx.Connection do
       }, after #{duration}ms"
     )
 
-    GenServer.reply(from, {:error, err})
+    GenServer.cast(pid, {:send_response, {response.sequence_id, {:error, err}}})
 
     :telemetry.execute(
       [:pulsar_ex, :connection, :send, :error],

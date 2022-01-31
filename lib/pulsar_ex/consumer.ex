@@ -694,7 +694,7 @@ defmodule PulsarEx.Consumer do
         )
 
         :telemetry.execute(
-          [:pulsar_ex, :consumer, :ack_responds],
+          [:pulsar_ex, :consumer, :ack_response],
           %{count: length(message_ids)},
           state.metadata
         )

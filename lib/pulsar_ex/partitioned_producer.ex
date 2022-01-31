@@ -14,6 +14,9 @@ defmodule PulsarEx.PartitionedProducer do
       :send_timeout,
       :queue,
       :queue_size,
+      :max_queue_size,
+      :batch,
+      :pending_send,
       :last_sequence_id,
       :producer_opts,
       :connection_attempt,
@@ -34,6 +37,9 @@ defmodule PulsarEx.PartitionedProducer do
       :send_timeout,
       :queue,
       :queue_size,
+      :max_queue_size,
+      :batch,
+      :pending_send,
       :last_sequence_id,
       :producer_opts,
       :connection_attempt,
@@ -55,15 +61,16 @@ defmodule PulsarEx.PartitionedProducer do
 
   alias PulsarEx.{Topic, Broker, Admin, ConnectionManager, Connection, ProducerMessage}
 
-  @batch_enabled true
+  @batch_enabled false
   @batch_size 100
+  @max_queue_size 1000
   @flush_interval 1000
   @connection_interval 3000
   @max_connection_attempts 10
-  @send_timeout 30_000
+  @send_timeout 5000
 
-  def produce(pid, payload, message_opts, send_timeout) do
-    GenServer.call(pid, {:produce, payload, message_opts}, send_timeout)
+  def produce(pid, payload, message_opts) do
+    GenServer.call(pid, {:produce, payload, message_opts}, :infinity)
   end
 
   def start_link({topic_name, partition, producer_opts}) do
@@ -102,6 +109,9 @@ defmodule PulsarEx.PartitionedProducer do
       send_timeout: Keyword.get(producer_opts, :send_timeout, @send_timeout),
       queue: :queue.new(),
       queue_size: 0,
+      batch: [],
+      pending_send: nil,
+      max_queue_size: min(Keyword.get(producer_opts, :max_queue_size, @max_queue_size), 10000),
       last_sequence_id: -1,
       producer_opts: producer_opts,
       connection_attempt: 0,
@@ -110,10 +120,7 @@ defmodule PulsarEx.PartitionedProducer do
     }
 
     Process.send(self(), :connect, [])
-
-    if state.batch_enabled do
-      Process.send_after(self(), :flush, state.flush_interval)
-    end
+    Process.send_after(self(), :flush, state.flush_interval)
 
     {:ok, state}
   end
@@ -177,7 +184,7 @@ defmodule PulsarEx.PartitionedProducer do
         state.metadata
       )
 
-      {:noreply, flush_queue(state, true)}
+      {:noreply, state}
     else
       # This happens when connection first establish, simply retry
       {:error, :invalid_message} = err ->
@@ -234,10 +241,26 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_info(:flush, state) do
-    state = flush_queue(state, true)
+    state = flush(state, true)
     Process.send_after(self(), :flush, state.flush_interval)
 
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_call(
+        {:produce, _, _},
+        _from,
+        %{queue_size: queue_size, max_queue_size: max_queue_size} = state
+      )
+      when queue_size + 1 > max_queue_size do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send, :error],
+      %{count: 1},
+      state.metadata
+    )
+
+    {:reply, {:error, :producer_queue_overflow}, state}
   end
 
   @impl true
@@ -247,12 +270,36 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_call(
-        {:produce, payload, message_opts},
+        {:produce, payload, %{deliver_at_time: nil} = message_opts},
         from,
-        %{state: :connecting} = state
+        %{state: :connecting, batch_enabled: true} = state
       ) do
-    queue = :queue.in({payload, message_opts, from}, state.queue)
-    {:noreply, %{state | queue_size: state.queue_size + 1, queue: queue}}
+    batch = [{payload, message_opts, from} | state.batch]
+
+    {queue, batch} =
+      if length(batch) >= state.batch_size do
+        queue = :queue.in(Enum.reverse(batch), state.queue)
+        {queue, []}
+      else
+        {state.queue, batch}
+      end
+
+    {:noreply, %{state | queue_size: state.queue_size + 1, queue: queue, batch: batch}}
+  end
+
+  @impl true
+  def handle_call({:produce, payload, message_opts}, from, %{state: :connecting} = state) do
+    {queue, batch} =
+      if state.batch == [] do
+        queue = :queue.in({payload, message_opts, from}, state.queue)
+        {queue, []}
+      else
+        queue = :queue.in(Enum.reverse(state.batch), state.queue)
+        queue = :queue.in({payload, message_opts, from}, queue)
+        {queue, []}
+      end
+
+    {:noreply, %{state | queue_size: state.queue_size + 1, queue: queue, batch: batch}}
   end
 
   @impl true
@@ -273,45 +320,139 @@ defmodule PulsarEx.PartitionedProducer do
         from,
         %{batch_enabled: true} = state
       ) do
-    queue = :queue.in({payload, message_opts, from}, state.queue)
-    state = %{state | queue_size: state.queue_size + 1, queue: queue}
-    {:noreply, flush_queue(state, false)}
+    batch = [{payload, message_opts, from} | state.batch]
+
+    {queue, batch} =
+      if length(batch) >= state.batch_size do
+        queue = :queue.in(Enum.reverse(batch), state.queue)
+        {queue, []}
+      else
+        {state.queue, batch}
+      end
+
+    state = %{state | queue_size: state.queue_size + 1, queue: queue, batch: batch}
+    {:noreply, flush(state, false)}
   end
 
   @impl true
-  def handle_call({:produce, payload, message_opts}, _from, state) do
-    state = flush_queue(state, true)
+  def handle_call({:produce, payload, message_opts}, from, state) do
+    {queue, batch} =
+      if state.batch == [] do
+        queue = :queue.in({payload, message_opts, from}, state.queue)
+        {queue, []}
+      else
+        queue = :queue.in(Enum.reverse(state.batch), state.queue)
+        queue = :queue.in({payload, message_opts, from}, queue)
+        {queue, []}
+      end
 
-    start = System.monotonic_time()
+    state = %{state | queue_size: state.queue_size + 1, queue: queue, batch: batch}
+    {:noreply, flush(state, false)}
+  end
 
-    {%{sequence_id: sequence_id} = message, state} = create_message(payload, message_opts, state)
+  @impl true
+  def handle_cast({:send_response, _}, %{pending_send: nil} = state) do
+    Logger.warn(
+      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
+        state.broker_name
+      }"
+    )
 
-    reply =
-      Connection.send_message(
-        state.connection,
-        state.producer_id,
-        sequence_id,
-        message,
-        state.send_timeout
-      )
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send_response, :stale],
+      %{count: 1},
+      state.metadata
+    )
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:send_response, {sequence_id, _}}, %{pending_send: {seq_id, _, _}} = state)
+      when sequence_id != seq_id do
+    Logger.warn(
+      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
+        state.broker_name
+      }"
+    )
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send_response, :stale],
+      %{count: 1},
+      state.metadata
+    )
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast(
+        {:send_response, {_, reply}},
+        %{pending_send: {_, {_, _, from}, {milli_ts, ts}}} = state
+      ) do
+    duration = System.monotonic_time(:millisecond) - milli_ts
+
+    Logger.debug(
+      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
+        state.broker_name
+      } after #{duration}ms"
+    )
 
     case reply do
       {:ok, _} ->
         :telemetry.execute(
-          [:pulsar_ex, :producer, :send, :success],
-          %{count: 1, duration: System.monotonic_time() - start},
+          [:pulsar_ex, :producer, :send_response, :success],
+          %{count: 1, duration: System.monotonic_time() - ts},
           state.metadata
         )
 
       {:error, _} ->
         :telemetry.execute(
-          [:pulsar_ex, :producer, :send, :error],
-          %{count: 1},
+          [:pulsar_ex, :producer, :send_response, :error],
+          %{count: 1, duration: System.monotonic_time() - ts},
           state.metadata
         )
     end
 
-    {:reply, reply, state}
+    GenServer.reply(from, reply)
+
+    {:noreply, %{state | pending_send: nil}}
+  end
+
+  @impl true
+  def handle_cast(
+        {:send_response, {_, reply}},
+        %{pending_send: {_, batch, {milli_ts, ts}}} = state
+      ) do
+    duration = System.monotonic_time(:millisecond) - milli_ts
+
+    Logger.debug(
+      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
+        state.broker_name
+      } after #{duration}ms"
+    )
+
+    case reply do
+      {:ok, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send_response, :success],
+          %{count: length(batch), duration: System.monotonic_time() - ts},
+          state.metadata
+        )
+
+      {:error, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send_response, :error],
+          %{count: length(batch), duration: System.monotonic_time() - ts},
+          state.metadata
+        )
+    end
+
+    Enum.each(batch, fn {_, _, from} ->
+      GenServer.reply(from, reply)
+    end)
+
+    {:noreply, %{state | pending_send: nil}}
   end
 
   @impl true
@@ -334,7 +475,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def terminate(reason, state) do
-    reply_all(state.queue, reason)
+    state = reply_all(state, reason)
 
     case reason do
       :shutdown ->
@@ -381,105 +522,129 @@ defmodule PulsarEx.PartitionedProducer do
     end
   end
 
-  defp dequeue(state, batch \\ []) do
-    case {:queue.peek(state.queue), batch} do
-      {:empty, _} ->
-        {Enum.reverse(batch), state}
+  defp send_message({payload, message_opts, from}, state) do
+    milli_ts = System.monotonic_time(:millisecond)
+    ts = System.monotonic_time()
 
-      {{:value, {_, %{deliver_at_time: nil}, _}}, _} ->
-        {{:value, {payload, message_opts, from}}, queue} = :queue.out(state.queue)
-        state = %{state | queue_size: state.queue_size - 1, queue: queue}
-        {message, state} = create_message(payload, message_opts, state)
-        dequeue(state, [{message, from} | batch])
+    {%{sequence_id: sequence_id} = message, state} = create_message(payload, message_opts, state)
 
-      {{:value, _}, []} ->
-        {{:value, {payload, message_opts, from}}, queue} = :queue.out(state.queue)
-        state = %{state | queue_size: state.queue_size - 1, queue: queue}
-        {message, state} = create_message(payload, message_opts, state)
-        {[{message, from}], state}
+    reply =
+      Connection.send_message(
+        state.connection,
+        state.producer_id,
+        sequence_id,
+        message
+      )
 
-      {{:value, _}, batch} ->
-        {Enum.reverse(batch), state}
+    case reply do
+      :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :success],
+          %{count: 1, duration: System.monotonic_time() - ts},
+          state.metadata
+        )
+
+        %{state | pending_send: {sequence_id, {payload, message_opts, from}, {milli_ts, ts}}}
+
+      {:error, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :error],
+          %{count: 1},
+          state.metadata
+        )
+
+        GenServer.reply(from, reply)
+        %{state | pending_send: nil}
     end
   end
 
-  defp flush_queue(%{queue_size: queue_size, batch_size: batch_size} = state, false)
-       when queue_size < batch_size do
-    state
+  defp send_messages(batch, state) do
+    milli_ts = System.monotonic_time(:millisecond)
+    ts = System.monotonic_time()
+
+    {messages, state} =
+      Enum.reduce(batch, {[], state}, fn {payload, message_opts, _}, {msgs, acc} ->
+        {msg, acc} = create_message(payload, message_opts, acc)
+        {[msg | msgs], acc}
+      end)
+
+    [%{sequence_id: sequence_id} | _] = messages = Enum.reverse(messages)
+
+    reply =
+      Connection.send_messages(
+        state.connection,
+        state.producer_id,
+        sequence_id,
+        messages
+      )
+
+    case reply do
+      :ok ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :success],
+          %{count: length(batch), duration: System.monotonic_time() - ts},
+          state.metadata
+        )
+
+        %{state | pending_send: {sequence_id, batch, {milli_ts, ts}}}
+
+      {:error, _} ->
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :error],
+          %{count: length(batch)},
+          state.metadata
+        )
+
+        Enum.each(batch, fn {_, _, from} -> GenServer.reply(from, reply) end)
+        %{state | pending_send: nil}
+    end
   end
 
-  defp flush_queue(state, force?) do
-    {batch, state} = dequeue(state)
+  defp flush(%{pending_send: {_, {payload, message_opts, from}, {milli_ts, _}}} = state, _) do
+    if System.monotonic_time(:millisecond) - milli_ts < state.send_timeout do
+      state
+    else
+      :telemetry.execute(
+        [:pulsar_ex, :producer, :send, :timeout],
+        %{count: 1},
+        state.metadata
+      )
 
-    case batch do
-      [] ->
-        state
+      send_message({payload, message_opts, from}, state)
+    end
+  end
 
-      [{%{sequence_id: sequence_id} = message, from}] ->
-        start = System.monotonic_time()
+  defp flush(%{pending_send: {_, batch, {milli_ts, _}}} = state, _) do
+    if System.monotonic_time(:millisecond) - milli_ts < state.send_timeout do
+      state
+    else
+      :telemetry.execute(
+        [:pulsar_ex, :producer, :send, :timeout],
+        %{count: length(batch)},
+        state.metadata
+      )
 
-        reply =
-          Connection.send_message(
-            state.connection,
-            state.producer_id,
-            sequence_id,
-            message,
-            state.send_timeout
-          )
+      send_messages(batch, state)
+    end
+  end
 
-        case reply do
-          {:ok, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :producer, :send, :success],
-              %{count: 1, duration: System.monotonic_time() - start},
-              state.metadata
-            )
-
-          {:error, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :producer, :send, :error],
-              %{count: 1},
-              state.metadata
-            )
+  defp flush(state, force?) do
+    case :queue.out(state.queue) do
+      {:empty, _} ->
+        if force? && state.batch != [] do
+          state = send_messages(state.batch, state)
+          %{state | queue_size: state.queue_size - length(state.batch), batch: []}
+        else
+          state
         end
 
-        GenServer.reply(from, reply)
+      {{:value, {payload, message_opts, from}}, queue} ->
+        state = send_message({payload, message_opts, from}, state)
+        %{state | queue_size: state.queue_size - 1, queue: queue}
 
-        flush_queue(state, force?)
-
-      _ ->
-        {[%{sequence_id: sequence_id} | _] = messages, froms} = Enum.unzip(batch)
-
-        start = System.monotonic_time()
-
-        reply =
-          Connection.send_messages(
-            state.connection,
-            state.producer_id,
-            sequence_id,
-            messages,
-            state.send_timeout
-          )
-
-        case reply do
-          {:ok, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :producer, :send, :success],
-              %{count: length(messages), duration: System.monotonic_time() - start},
-              state.metadata
-            )
-
-          {:error, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :producer, :send, :error],
-              %{count: length(messages)},
-              state.metadata
-            )
-        end
-
-        Enum.each(froms, &GenServer.reply(&1, reply))
-
-        flush_queue(state, force?)
+      {{:value, batch}, queue} ->
+        state = send_messages(batch, state)
+        %{state | queue_size: state.queue_size - length(batch), queue: queue}
     end
   end
 
@@ -525,14 +690,34 @@ defmodule PulsarEx.PartitionedProducer do
     {message, state}
   end
 
-  defp reply_all(queue, reply) do
-    case :queue.out(queue) do
+  defp reply_all(%{pending_send: {_, {_, _, from}, _}} = state, reply) do
+    GenServer.reply(from, reply)
+    reply_all(%{state | pending_send: nil}, reply)
+  end
+
+  defp reply_all(%{batch: []} = state, reply) do
+    case :queue.out(state.queue) do
       {:empty, _} ->
-        nil
+        state
 
       {{:value, {_, _, from}}, queue} ->
         GenServer.reply(from, reply)
         reply_all(queue, reply)
+
+      {{:value, batch}, queue} ->
+        Enum.each(batch, fn {_, _, from} ->
+          GenServer.reply(from, reply)
+        end)
+
+        reply_all(queue, reply)
     end
+  end
+
+  defp reply_all(%{batch: batch} = state, reply) do
+    Enum.each(batch, fn {_, _, from} ->
+      GenServer.reply(from, reply)
+    end)
+
+    reply_all(%{state | batch: []}, reply)
   end
 end
