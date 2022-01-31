@@ -32,6 +32,7 @@ defmodule PulsarEx.Consumer do
       :message_received,
       :message_acked,
       :message_nacked,
+      :pending_acks,
       :message_dead_lettered,
       :flow_permits_sent
     ]
@@ -76,6 +77,7 @@ defmodule PulsarEx.Consumer do
       :message_received,
       :message_acked,
       :message_nacked,
+      :pending_acks,
       :message_dead_lettered,
       :flow_permits_sent
     ]
@@ -113,6 +115,7 @@ defmodule PulsarEx.Consumer do
       @dead_letter_producer_opts Keyword.get(opts, :dead_letter_producer_opts, [])
       @max_connection_attempts Keyword.get(opts, :max_connection_attempts, 10)
       @connection_interval 3000
+      @ack_timeout 5000
 
       def start_link({topic_name, partition, subscription, consumer_opts}) do
         GenServer.start_link(__MODULE__, {topic_name, partition, subscription, consumer_opts})
@@ -237,6 +240,7 @@ defmodule PulsarEx.Consumer do
           message_received: 0,
           message_acked: 0,
           message_nacked: 0,
+          pending_acks: %{},
           message_dead_lettered: 0,
           flow_permits_sent: 0
         }
@@ -307,6 +311,7 @@ defmodule PulsarEx.Consumer do
               message_received: 0,
               message_acked: 0,
               message_nacked: 0,
+              pending_acks: %{},
               message_dead_lettered: 0,
               flow_permits_sent: 0
           }
@@ -376,10 +381,16 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info(:acks, state) do
+        timeout_acks =
+          Enum.filter(state.pending_acks, fn {_, ts} ->
+            System.monotonic_time(:millisecond) - ts > @ack_timeout
+          end)
+          |> Enum.map(fn {message_id, _} -> message_id end)
+
         {available_acks, acks} = Enum.split_with(state.acks, &match?({_, {true, _}}, &1))
 
         cond do
-          length(available_acks) == 0 ->
+          length(available_acks) == 0 && length(timeout_acks) == 0 ->
             Process.send_after(self(), :acks, state.ack_interval)
             {:noreply, state}
 
@@ -393,6 +404,7 @@ defmodule PulsarEx.Consumer do
               |> Enum.unzip()
 
             total_acks = Enum.sum(batch_sizes)
+            available_acks = available_acks ++ timeout_acks
 
             case Connection.ack(state.connection, state.consumer_id, :individual, available_acks) do
               :ok ->
@@ -414,10 +426,17 @@ defmodule PulsarEx.Consumer do
 
                 Process.send_after(self(), :acks, state.ack_interval)
 
+                pending_acks =
+                  available_acks
+                  |> Enum.reduce(%{}, fn message_id, acc ->
+                    Map.put(acc, message_id, System.monotonic_time(:millisecond))
+                  end)
+
                 {:noreply,
                  %{
                    state
                    | acks: Enum.into(acks, %{}),
+                     pending_acks: Map.merge(state.pending_acks, pending_acks),
                      message_acked: state.message_acked + total_acks
                  }}
 
@@ -656,6 +675,17 @@ defmodule PulsarEx.Consumer do
             Process.send_after(self(), :connect, @connection_interval)
             {:noreply, %{state | state: :connecting}}
         end
+      end
+
+      @impl true
+      def handle_cast({:ack_response, message_ids}, %State{} = state) do
+        Logger.debug(
+          "Received #{length(message_ids)} acked message_ids for consumer #{state.consumer_id} from topic #{
+            state.topic_name
+          }"
+        )
+
+        {:noreply, %State{state | pending_acks: Map.drop(state.pending_acks, message_ids)}}
       end
 
       @impl true
