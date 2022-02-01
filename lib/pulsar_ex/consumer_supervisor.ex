@@ -12,7 +12,7 @@ defmodule PulsarEx.ConsumerSupervisor do
   @impl true
   def init(:init) do
     children = [
-      {Registry, keys: :unique, name: ConsumerRegistry},
+      {Registry, keys: :unique, name: ConsumerRegistry, partitions: System.schedulers_online()},
       {DynamicSupervisor, strategy: :one_for_one, max_restarts: @max_restarts, name: Consumers},
       ConsumerManager
     ]

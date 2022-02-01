@@ -13,7 +13,7 @@ defmodule PulsarEx.ProducerSupervisor do
     auto_start = Keyword.get(producer_opts, :auto_start, true)
 
     children = [
-      {Registry, keys: :unique, name: ProducerRegistry},
+      {Registry, keys: :unique, name: ProducerRegistry, partitions: System.schedulers_online()},
       {DynamicSupervisor, strategy: :one_for_one, name: Producers},
       {ProducerManager, auto_start}
     ]

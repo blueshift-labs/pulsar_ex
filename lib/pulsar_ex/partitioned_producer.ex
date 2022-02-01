@@ -702,14 +702,14 @@ defmodule PulsarEx.PartitionedProducer do
 
       {{:value, {_, _, from}}, queue} ->
         GenServer.reply(from, reply)
-        reply_all(queue, reply)
+        reply_all(%{state | queue: queue}, reply)
 
       {{:value, batch}, queue} ->
         Enum.each(batch, fn {_, _, from} ->
           GenServer.reply(from, reply)
         end)
 
-        reply_all(queue, reply)
+        reply_all(%{state | queue: queue}, reply)
     end
   end
 

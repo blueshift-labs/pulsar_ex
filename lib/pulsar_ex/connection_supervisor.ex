@@ -10,7 +10,7 @@ defmodule PulsarEx.ConnectionSupervisor do
   @impl true
   def init(:init) do
     children = [
-      {Registry, keys: :unique, name: ConnectionRegistry},
+      {Registry, keys: :unique, name: ConnectionRegistry, partitions: System.schedulers_online()},
       {DynamicSupervisor, strategy: :one_for_one, name: Connections},
       ConnectionManager
     ]
