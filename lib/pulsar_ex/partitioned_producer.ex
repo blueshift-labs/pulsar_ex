@@ -10,6 +10,7 @@ defmodule PulsarEx.PartitionedProducer do
       :metadata,
       :batch_enabled,
       :batch_size,
+      :compaction_enabled,
       :flush_interval,
       :send_timeout,
       :queue,
@@ -33,6 +34,7 @@ defmodule PulsarEx.PartitionedProducer do
       :producer_id,
       :batch_enabled,
       :batch_size,
+      :compaction_enabled,
       :flush_interval,
       :send_timeout,
       :queue,
@@ -63,6 +65,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   @batch_enabled false
   @batch_size 100
+  @compaction_enabled false
   @max_queue_size 1000
   @flush_interval 1000
   @connection_interval 3000
@@ -71,6 +74,10 @@ defmodule PulsarEx.PartitionedProducer do
 
   def produce(pid, payload, message_opts) do
     GenServer.call(pid, {:produce, payload, message_opts}, :infinity)
+  end
+
+  def async_produce(pid, payload, message_opts) do
+    GenServer.cast(pid, {:produce, payload, message_opts})
   end
 
   def start_link({topic_name, partition, producer_opts}) do
@@ -105,6 +112,7 @@ defmodule PulsarEx.PartitionedProducer do
       metadata: metadata,
       batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
       batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
+      compaction_enabled: Keyword.get(producer_opts, :compaction_enabled, @compaction_enabled),
       flush_interval: max(Keyword.get(producer_opts, :flush_interval, @flush_interval), 100),
       send_timeout: Keyword.get(producer_opts, :send_timeout, @send_timeout),
       queue: :queue.new(),
@@ -351,6 +359,106 @@ defmodule PulsarEx.PartitionedProducer do
   end
 
   @impl true
+  def handle_cast(
+        {:produce, _, _},
+        %{queue_size: queue_size, max_queue_size: max_queue_size} = state
+      )
+      when queue_size + 1 > max_queue_size do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send, :error],
+      %{count: 1},
+      state.metadata
+    )
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:produce, payload, message_opts}, state) when is_list(message_opts) do
+    handle_cast({:produce, payload, map_message_opts(message_opts)}, state)
+  end
+
+  @impl true
+  def handle_cast(
+        {:produce, payload, %{deliver_at_time: nil} = message_opts},
+        %{state: :connecting, batch_enabled: true} = state
+      ) do
+    batch = [{payload, message_opts, nil} | state.batch]
+
+    {queue, batch} =
+      if length(batch) >= state.batch_size do
+        queue = :queue.in(batch, state.queue)
+        {queue, []}
+      else
+        {state.queue, batch}
+      end
+
+    {:noreply, %{state | queue_size: state.queue_size + 1, queue: queue, batch: batch}}
+  end
+
+  @impl true
+  def handle_cast({:produce, payload, message_opts}, %{state: :connecting} = state) do
+    {queue, batch} =
+      if state.batch == [] do
+        queue = :queue.in({payload, message_opts, nil}, state.queue)
+        {queue, []}
+      else
+        queue = :queue.in(state.batch, state.queue)
+        queue = :queue.in({payload, message_opts, nil}, queue)
+        {queue, []}
+      end
+
+    {:noreply, %{state | queue_size: state.queue_size + 1, queue: queue, batch: batch}}
+  end
+
+  @impl true
+  def handle_cast({:produce, payload, _}, %{max_message_size: max_message_size} = state)
+      when byte_size(payload) > max_message_size do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send, :error],
+      %{count: 1},
+      state.metadata
+    )
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast(
+        {:produce, payload, %{deliver_at_time: nil} = message_opts},
+        %{batch_enabled: true} = state
+      ) do
+    batch = [{payload, message_opts, nil} | state.batch]
+
+    {queue, batch} =
+      if length(batch) >= state.batch_size do
+        queue = :queue.in(batch, state.queue)
+        {queue, []}
+      else
+        {state.queue, batch}
+      end
+
+    state = %{state | queue_size: state.queue_size + 1, queue: queue, batch: batch}
+    {:noreply, flush(state, false)}
+  end
+
+  @impl true
+  def handle_cast({:produce, payload, message_opts}, state) do
+    {queue, batch} =
+      if state.batch == [] do
+        queue = :queue.in({payload, message_opts, nil}, state.queue)
+        {queue, []}
+      else
+        queue = :queue.in(state.batch, state.queue)
+        queue = :queue.in({payload, message_opts, nil}, queue)
+        {queue, []}
+      end
+
+    state = %{state | queue_size: state.queue_size + 1, queue: queue, batch: batch}
+    {:noreply, flush(state, false)}
+  end
+
+  @impl true
   def handle_cast({:send_response, _}, %{pending_send: nil} = state) do
     Logger.warn(
       "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
@@ -415,7 +523,7 @@ defmodule PulsarEx.PartitionedProducer do
         )
     end
 
-    Enum.each(froms, &GenServer.reply(&1, reply))
+    Enum.each(froms, &reply(&1, reply))
 
     {:noreply, %{state | pending_send: nil}}
   end
@@ -449,7 +557,7 @@ defmodule PulsarEx.PartitionedProducer do
         )
     end
 
-    GenServer.reply(from, reply)
+    reply(from, reply)
 
     {:noreply, %{state | pending_send: nil}}
   end
@@ -555,20 +663,26 @@ defmodule PulsarEx.PartitionedProducer do
           state.metadata
         )
 
-        GenServer.reply(from, reply)
+        reply(from, reply)
         %{state | pending_send: nil}
     end
   end
 
   defp send_messages(batch, state) when is_list(batch) do
-    {messages, state} =
-      Enum.reduce(batch, {[], state}, fn {payload, message_opts, from}, {msgs, acc} ->
-        {msg, acc} = create_message(payload, message_opts, acc)
-        {[{msg, from} | msgs], acc}
+    {messages, _, state} =
+      Enum.reduce(batch, {[], MapSet.new(), state}, fn {payload, message_opts, _},
+                                                       {msgs, keys, acc} ->
+        key = Map.get(message_opts, :ordering_key) || Map.get(message_opts, :partition_key)
+
+        if state.compaction_enabled && key && MapSet.member?(keys, key) do
+          {msgs, keys, acc}
+        else
+          {msg, acc} = create_message(payload, message_opts, acc)
+          {[msg | msgs], MapSet.put(keys, key), acc}
+        end
       end)
 
-    {messages, froms} = Enum.unzip(messages)
-
+    froms = Enum.map(batch, fn {_, _, from} -> from end)
     do_send_messages(messages, froms, state)
   end
 
@@ -592,6 +706,12 @@ defmodule PulsarEx.PartitionedProducer do
           state.metadata
         )
 
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :compacted],
+          %{count: length(froms) - length(messages)},
+          state.metadata
+        )
+
         %{state | pending_send: {sequence_id, {messages, froms}, {milli_ts, ts}}}
 
       {:error, _} ->
@@ -601,7 +721,7 @@ defmodule PulsarEx.PartitionedProducer do
           state.metadata
         )
 
-        Enum.each(froms, &GenServer.reply(&1, reply))
+        Enum.each(froms, &reply(&1, reply))
         %{state | pending_send: nil}
     end
   end
@@ -697,13 +817,16 @@ defmodule PulsarEx.PartitionedProducer do
     {message, state}
   end
 
+  defp reply(nil, _reply), do: nil
+  defp reply(from, reply), do: GenServer.reply(from, reply)
+
   defp reply_all(%{pending_send: {_, {_, froms}, _}} = state, reply) when is_list(froms) do
-    Enum.each(froms, &GenServer.reply(&1, reply))
+    Enum.each(froms, &reply(&1, reply))
     reply_all(%{state | pending_send: nil}, reply)
   end
 
   defp reply_all(%{pending_send: {_, {_, from}, _}} = state, reply) do
-    GenServer.reply(from, reply)
+    reply(from, reply)
     reply_all(%{state | pending_send: nil}, reply)
   end
 
@@ -713,14 +836,14 @@ defmodule PulsarEx.PartitionedProducer do
         state
 
       {{:value, {_, _, from}}, queue} ->
-        GenServer.reply(from, reply)
+        reply(from, reply)
         reply_all(%{state | queue: queue}, reply)
 
       {{:value, batch}, queue} ->
         batch
         |> Enum.reverse()
         |> Enum.each(fn {_, _, from} ->
-          GenServer.reply(from, reply)
+          reply(from, reply)
         end)
 
         reply_all(%{state | queue: queue}, reply)
@@ -731,7 +854,7 @@ defmodule PulsarEx.PartitionedProducer do
     batch
     |> Enum.reverse()
     |> Enum.each(fn {_, _, from} ->
-      GenServer.reply(from, reply)
+      reply(from, reply)
     end)
 
     reply_all(%{state | batch: []}, reply)

@@ -16,12 +16,19 @@ defmodule PulsarEx.WorkerCallback do
 end
 
 defmodule PulsarEx.ProducerCallback do
-  alias PulsarEx.Proto.{MessageIdData, ServerError}
+  alias PulsarEx.Proto.{MessageIdData}
 
   @callback produce(
               topic_name :: String.t(),
               payload :: binary(),
               message_opts :: keyword(),
               producer_opts :: keyword()
-            ) :: {:ok, MessageIdData.t()} | {:error, ServerError.t()}
+            ) :: {:ok, MessageIdData.t()} | {:error, term()}
+
+  @callback async_produce(
+              topic_name :: String.t(),
+              payload :: binary(),
+              message_opts :: keyword(),
+              producer_opts :: keyword()
+            ) :: :ok | {:error, term()}
 end
