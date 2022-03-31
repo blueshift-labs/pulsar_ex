@@ -4,14 +4,15 @@ defmodule PulsarEx.Worker do
     opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
+    {inline, opts} = Keyword.pop(opts, :inline, false)
     {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
     {producer_opts, opts} = Keyword.pop(opts, :producer_opts, [])
-    {otp_app, subscription, jobs, middlewares, producer_opts, opts}
+    {otp_app, subscription, jobs, inline, middlewares, producer_opts, opts}
   end
 
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
-      {otp_app, subscription, jobs, middlewares, producer_opts, opts} =
+      {otp_app, subscription, jobs, inline, middlewares, producer_opts, opts} =
         PulsarEx.Worker.compile_config(__MODULE__, opts)
 
       opts =
@@ -29,6 +30,7 @@ defmodule PulsarEx.Worker do
       @topic Keyword.get(opts, :topic)
       @subscription subscription
       @jobs jobs
+      @inline inline
       @default_middlewares [PulsarEx.Middlewares.Telemetry, PulsarEx.Middlewares.Logging]
       @middlewares @default_middlewares ++ middlewares
       @producer_opts producer_opts
@@ -109,41 +111,45 @@ defmodule PulsarEx.Worker do
       end
 
       def enqueue_job(job, params, topic, message_opts) when job in @jobs do
-        start = System.monotonic_time()
+        if @inline do
+          handle_job(job, params)
+        else
+          start = System.monotonic_time()
 
-        properties =
-          Keyword.get(message_opts, :properties, [])
-          |> Enum.into(%{})
-          |> Map.put("job", job)
+          properties =
+            Keyword.get(message_opts, :properties, [])
+            |> Enum.into(%{})
+            |> Map.put("job", job)
 
-        reply =
-          PulsarEx.produce(
-            topic,
-            Jason.encode!(params),
-            Keyword.merge(message_opts,
-              properties: properties,
-              partition_key: partition_key(job, params, message_opts)
-            ),
-            @producer_opts
-          )
-
-        case reply do
-          {:ok, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :worker, :enqueue, :success],
-              %{count: 1, duration: System.monotonic_time() - start},
-              %{topic: topic, job: job}
+          reply =
+            PulsarEx.produce(
+              topic,
+              Jason.encode!(params),
+              Keyword.merge(message_opts,
+                properties: properties,
+                partition_key: partition_key(job, params, message_opts)
+              ),
+              @producer_opts
             )
 
-          {:error, _} ->
-            :telemetry.execute(
-              [:pulsar_ex, :worker, :enqueue, :error],
-              %{count: 1},
-              %{topic: topic, job: job}
-            )
+          case reply do
+            {:ok, _} ->
+              :telemetry.execute(
+                [:pulsar_ex, :worker, :enqueue, :success],
+                %{count: 1, duration: System.monotonic_time() - start},
+                %{topic: topic, job: job}
+              )
+
+            {:error, _} ->
+              :telemetry.execute(
+                [:pulsar_ex, :worker, :enqueue, :error],
+                %{count: 1},
+                %{topic: topic, job: job}
+              )
+          end
+
+          reply
         end
-
-        reply
       end
 
       def start(opts \\ []) do
