@@ -111,8 +111,26 @@ defmodule PulsarEx.Worker do
       end
 
       def enqueue_job(job, params, topic, message_opts) when job in @jobs do
+        {:ok, params} = Jason.encode!(params) |> Jason.decode()
+
         if @inline do
-          handle_job(job, params)
+          payload = %JobState{
+            topic: topic,
+            subscription: nil,
+            job: job,
+            payload: params,
+            properties: nil,
+            publish_time: nil,
+            event_time: nil,
+            producer_name: nil,
+            partition_key: nil,
+            ordering_key: nil,
+            deliver_at_time: nil,
+            redelivery_count: nil,
+            state: nil
+          }
+
+          handle_job(job, payload)
         else
           start = System.monotonic_time()
 
