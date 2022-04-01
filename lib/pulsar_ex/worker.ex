@@ -112,7 +112,7 @@ defmodule PulsarEx.Worker do
 
       def enqueue_job(job, params, topic, message_opts) when job in @jobs do
         if @inline do
-          handle_job(job, params)
+          inline_process(job, params, topic, message_opts)
         else
           start = System.monotonic_time()
 
@@ -149,6 +149,38 @@ defmodule PulsarEx.Worker do
           end
 
           reply
+        end
+      end
+
+      def inline_process(job, params, topic, message_opts) do
+        params = Jason.decode!(Jason.encode!(params))
+
+        properties =
+          message_opts
+          |> Keyword.get(:properties, [])
+          |> Enum.map(fn {k, v} -> {"#{k}", "#{v}"} end)
+          |> Enum.into(%{})
+
+        job_state =
+          job_handler().(%JobState{
+            topic: topic,
+            subscription: @subscription,
+            job: job,
+            payload: params,
+            properties: properties,
+            publish_time: Timex.now(),
+            event_time: nil,
+            producer_name: "inline",
+            partition_key: partition_key(job, params, message_opts),
+            ordering_key: nil,
+            deliver_at_time: nil,
+            redelivery_count: 0,
+            state: nil
+          })
+
+        case job_state.state do
+          :ok -> {:ok, nil}
+          _ -> job_state.state
         end
       end
 

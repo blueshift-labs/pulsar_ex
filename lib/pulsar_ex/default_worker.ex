@@ -4,6 +4,7 @@ defmodule PulsarEx.DefaultWorker do
     subscription: "test",
     topic: "persistent://public/default/test.json",
     subscription_type: :key_shared,
+    inline: true,
     jobs: [:test]
 
   @impl true
