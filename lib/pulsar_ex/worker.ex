@@ -4,16 +4,20 @@ defmodule PulsarEx.Worker do
     opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
+    {use_executor, opts} = Keyword.pop(opts, :use_executor, false)
+    {exec_timeout, opts} = Keyword.pop(opts, :exec_timeout, false)
     {inline, opts} = Keyword.pop(opts, :inline, false)
     {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
     {producer_opts, opts} = Keyword.pop(opts, :producer_opts, [])
-    {otp_app, subscription, jobs, inline, middlewares, producer_opts, opts}
+
+    {otp_app, subscription, jobs, use_executor, exec_timeout, inline, middlewares, producer_opts,
+     opts}
   end
 
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
-      {otp_app, subscription, jobs, inline, middlewares, producer_opts, opts} =
-        PulsarEx.Worker.compile_config(__MODULE__, opts)
+      {otp_app, subscription, jobs, use_executor, exec_timeout, inline, middlewares,
+       producer_opts, opts} = PulsarEx.Worker.compile_config(__MODULE__, opts)
 
       opts =
         opts
@@ -30,6 +34,8 @@ defmodule PulsarEx.Worker do
       @topic Keyword.get(opts, :topic)
       @subscription subscription
       @jobs jobs
+      @use_executor use_executor
+      @exec_timeout exec_timeout
       @inline inline
       @default_middlewares [PulsarEx.Middlewares.Telemetry, PulsarEx.Middlewares.Logging]
       @middlewares @default_middlewares ++ middlewares
@@ -61,7 +67,7 @@ defmodule PulsarEx.Worker do
         {job, properties} = Map.pop!(properties, "job")
         payload = Jason.decode!(message.payload)
 
-        job_state =
+        handler = fn ->
           job_handler().(%JobState{
             topic: state.topic_name,
             subscription: @subscription,
@@ -77,6 +83,17 @@ defmodule PulsarEx.Worker do
             redelivery_count: message.redelivery_count,
             state: nil
           })
+        end
+
+        job_state =
+          if @use_executor do
+            :poolboy.transaction(
+              :pulsar_ex_executors,
+              &PulsarEx.Executor.exec(&1, handler, @exec_timeout)
+            )
+          else
+            handler.()
+          end
 
         [job_state.state]
       end

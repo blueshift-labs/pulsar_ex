@@ -13,6 +13,7 @@ config :pulsar_ex,
   health_check: false
 
 config :pulsar_ex,
+  num_executors: 5,
   producer_opts: [
     auto_start: false,
     batch_enabled: false,
