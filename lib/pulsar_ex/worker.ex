@@ -5,7 +5,7 @@ defmodule PulsarEx.Worker do
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
     {use_executor, opts} = Keyword.pop(opts, :use_executor, false)
-    {exec_timeout, opts} = Keyword.pop(opts, :exec_timeout, false)
+    {exec_timeout, opts} = Keyword.pop(opts, :exec_timeout, 5_000)
     {inline, opts} = Keyword.pop(opts, :inline, false)
     {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
     {producer_opts, opts} = Keyword.pop(opts, :producer_opts, [])
