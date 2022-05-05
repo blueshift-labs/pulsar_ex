@@ -17,7 +17,7 @@ defmodule PulsarEx.ConsumerManager do
 
   require Logger
 
-  alias PulsarEx.{Consumers, ConsumerRegistry, PartitionManager, Topic, Admin}
+  alias PulsarEx.{Consumers, Consumer, ConsumerRegistry, PartitionManager, Topic, Admin}
 
   @num_consumers 1
   @refresh_interval 60_000
@@ -61,6 +61,24 @@ defmodule PulsarEx.ConsumerManager do
 
   def stop_consumer(topic_name, partitions, subscription) do
     GenServer.call(__MODULE__, {:stop, topic_name, partitions, subscription})
+  end
+
+  def idle_time(topic_name, subscription) do
+    with {:ok, {%Topic{}, partitions}} <- PartitionManager.lookup(topic_name) do
+      partitions = if partitions > 0, do: 0..(partitions - 1), else: [nil]
+
+      partitions
+      |> Enum.flat_map(fn partition ->
+        Registry.lookup(ConsumerRegistry, {topic_name, partition, subscription})
+      end)
+      |> Enum.flat_map(fn {sup, _} ->
+        Supervisor.which_children(sup)
+      end)
+      |> Enum.map(fn {_, consumer, _, _} ->
+        Consumer.idle_time(consumer)
+      end)
+      |> Enum.min(fn -> 0 end)
+    end
   end
 
   def start_link(_) do
@@ -267,7 +285,20 @@ defmodule PulsarEx.ConsumerManager do
 
   @impl true
   def terminate(reason, state) do
-    Logger.error("Shutting down Consumer Manager, #{inspect(reason)}")
+    case reason do
+      :shutdown ->
+        Logger.info("Shutting down Consumer Manager, #{inspect(reason)}")
+
+      :normal ->
+        Logger.info("Shutting down Consumer Manager, #{inspect(reason)}")
+
+      {:shutdown, _} ->
+        Logger.info("Shutting down Consumer Manager, #{inspect(reason)}")
+
+      _ ->
+        Logger.error("Shutting down Consumer Manager, #{inspect(reason)}")
+    end
+
     state
   end
 

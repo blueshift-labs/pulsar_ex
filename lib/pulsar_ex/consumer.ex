@@ -33,6 +33,7 @@ defmodule PulsarEx.Consumer do
       :message_acked,
       :message_nacked,
       :pending_acks,
+      :idle_since,
       :message_dead_lettered,
       :flow_permits_sent
     ]
@@ -78,9 +79,14 @@ defmodule PulsarEx.Consumer do
       :message_acked,
       :message_nacked,
       :pending_acks,
+      :idle_since,
       :message_dead_lettered,
       :flow_permits_sent
     ]
+  end
+
+  def idle_time(pid) do
+    GenServer.call(pid, :idle_time)
   end
 
   defmacro __using__(opts) do
@@ -241,6 +247,7 @@ defmodule PulsarEx.Consumer do
           message_acked: 0,
           message_nacked: 0,
           pending_acks: %{},
+          idle_since: System.monotonic_time(:millisecond),
           message_dead_lettered: 0,
           flow_permits_sent: 0
         }
@@ -699,7 +706,12 @@ defmodule PulsarEx.Consumer do
           state.metadata
         )
 
-        {:noreply, %State{state | pending_acks: Map.drop(state.pending_acks, message_ids)}}
+        {:noreply,
+         %State{
+           state
+           | pending_acks: Map.drop(state.pending_acks, message_ids),
+             idle_since: System.monotonic_time(:millisecond)
+         }}
       end
 
       @impl true
@@ -790,6 +802,18 @@ defmodule PulsarEx.Consumer do
 
         Process.send_after(self(), :connect, @connection_interval)
         {:noreply, %{state | state: :connecting}}
+      end
+
+      @impl true
+      def handle_call(:idle_time, _from, state) do
+        cond do
+          :queue.is_empty(state.queue) && state.batch == [] && Enum.empty?(state.pending_acks) ->
+            idle_time = System.monotonic_time(:millisecond) - state.idle_since
+            {:reply, idle_time, state}
+
+          true ->
+            {:reply, 0, state}
+        end
       end
 
       @impl true

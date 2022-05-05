@@ -42,6 +42,10 @@ defmodule PulsarEx.Worker do
       @producer_opts producer_opts
       @opts opts
 
+      def subscription() do
+        @subscription
+      end
+
       if @topic do
         def topic(), do: @topic
       else
@@ -81,6 +85,7 @@ defmodule PulsarEx.Worker do
             ordering_key: message.ordering_key,
             deliver_at_time: message.deliver_at_time,
             redelivery_count: message.redelivery_count,
+            consumer_opts: state.consumer_opts,
             state: nil
           })
         end
@@ -192,6 +197,7 @@ defmodule PulsarEx.Worker do
             ordering_key: nil,
             deliver_at_time: nil,
             redelivery_count: 0,
+            consumer_opts: nil,
             state: nil
           })
 

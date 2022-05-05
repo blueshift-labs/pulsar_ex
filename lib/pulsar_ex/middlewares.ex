@@ -15,6 +15,7 @@ defmodule PulsarEx.JobState do
     :deliver_at_time,
     :redelivery_count,
     :payload,
+    :consumer_opts,
     :state
   ]
 
@@ -31,6 +32,7 @@ defmodule PulsarEx.JobState do
     :deliver_at_time,
     :redelivery_count,
     :payload,
+    :consumer_opts,
     :state
   ]
 end
