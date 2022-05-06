@@ -73,6 +73,7 @@ defmodule PulsarEx.Worker do
 
         handler = fn ->
           job_handler().(%JobState{
+            worker: __MODULE__,
             topic: state.topic_name,
             subscription: @subscription,
             job: String.to_atom(job),
@@ -86,6 +87,7 @@ defmodule PulsarEx.Worker do
             deliver_at_time: message.deliver_at_time,
             redelivery_count: message.redelivery_count,
             consumer_opts: state.consumer_opts,
+            assigns: %{},
             state: nil
           })
         end
@@ -185,6 +187,7 @@ defmodule PulsarEx.Worker do
 
         job_state =
           job_handler().(%JobState{
+            worker: __MODULE__,
             topic: topic,
             subscription: @subscription,
             job: job,
@@ -198,6 +201,7 @@ defmodule PulsarEx.Worker do
             deliver_at_time: nil,
             redelivery_count: 0,
             consumer_opts: nil,
+            assigns: %{},
             state: nil
           })
 

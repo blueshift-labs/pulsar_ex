@@ -3,6 +3,7 @@ defmodule PulsarEx.JobState do
 
   @derive Jason.Encoder
   @enforce_keys [
+    :worker,
     :topic,
     :subscription,
     :job,
@@ -16,10 +17,12 @@ defmodule PulsarEx.JobState do
     :redelivery_count,
     :payload,
     :consumer_opts,
+    :assigns,
     :state
   ]
 
   defstruct [
+    :worker,
     :topic,
     :subscription,
     :job,
@@ -33,8 +36,13 @@ defmodule PulsarEx.JobState do
     :redelivery_count,
     :payload,
     :consumer_opts,
+    :assigns,
     :state
   ]
+
+  def assign(%PulsarEx.JobState{} = job_state, key, value) do
+    %{job_state | assigns: Map.put(job_state.assigns, key, value)}
+  end
 end
 
 defmodule PulsarEx.Middleware do
