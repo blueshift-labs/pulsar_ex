@@ -19,9 +19,20 @@ defmodule PulsarEx.Worker do
       {otp_app, subscription, jobs, use_executor, exec_timeout, inline, middlewares,
        producer_opts, opts} = PulsarEx.Worker.compile_config(__MODULE__, opts)
 
+      require Logger
+
+      if Keyword.get(opts, :batch_enabled) do
+        Logger.warn(
+          "Workers should not be configured with batch_enabled, ignoring batch settings. #{
+            inspect(opts)
+          }"
+        )
+      end
+
       opts =
         opts
         |> Keyword.merge(batch_size: 1, initial_position: :earliest)
+        |> Keyword.merge(batch_enabled: false)
         |> Keyword.put_new(:dead_letter_topic, :self)
         |> Keyword.put_new(:receiving_queue_size, 10)
 
