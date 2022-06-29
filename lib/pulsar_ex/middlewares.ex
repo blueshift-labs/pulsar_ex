@@ -1,7 +1,6 @@
 defmodule PulsarEx.JobState do
   @type t :: %__MODULE__{}
 
-  @derive Jason.Encoder
   @enforce_keys [
     :worker,
     :topic,
@@ -42,6 +41,23 @@ defmodule PulsarEx.JobState do
 
   def assign(%PulsarEx.JobState{} = job_state, key, value) do
     %{job_state | assigns: Map.put(job_state.assigns, key, value)}
+  end
+end
+
+defimpl Jason.Encoder, for: PulsarEx.JobState do
+  alias PulsarEx.JobState
+
+  @derivable ~w|worker topic subscription job properties publish_time event_time 
+    producer_name partition_key ordering_key deliver_at_time redelivery_count 
+    payload consumer_opts assigns state|a
+
+  def encode(%JobState{consumer_opts: consumer_opts} = state, opts) do
+    consumer_opts = (consumer_opts || []) |> Enum.into(%{})
+
+    state
+    |> Map.take(@derivable)
+    |> Map.put(:consumer_opts, consumer_opts)
+    |> Jason.Encode.map(opts)
   end
 end
 
