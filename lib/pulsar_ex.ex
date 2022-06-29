@@ -72,6 +72,10 @@ defmodule PulsarEx do
     end
   end
 
+  def consumers() do
+    DynamicSupervisor.which_children(PulsarEx.Consumers)
+  end
+
   defdelegate start_consumer(tenant, namespace, regex, subscription, module, opts),
     to: ConsumerManager
 
