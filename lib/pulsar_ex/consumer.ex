@@ -1,6 +1,8 @@
 defmodule PulsarEx.Consumer do
   defmodule State do
     @enforce_keys [
+      :cluster,
+      :cluster_opts,
       :state,
       :topic,
       :topic_name,
@@ -38,6 +40,8 @@ defmodule PulsarEx.Consumer do
       :flow_permits_sent
     ]
     defstruct [
+      :cluster,
+      :cluster_opts,
       :state,
       :topic,
       :topic_name,
@@ -123,23 +127,26 @@ defmodule PulsarEx.Consumer do
       @connection_interval 3000
       @ack_timeout 5000
 
-      def start_link({topic_name, partition, subscription, consumer_opts}) do
-        GenServer.start_link(__MODULE__, {topic_name, partition, subscription, consumer_opts})
+      def start_link({topic_name, partition, subscription, consumer_opts, cluster_opts}) do
+        GenServer.start_link(
+          __MODULE__,
+          {topic_name, partition, subscription, consumer_opts, cluster_opts}
+        )
       end
 
       @impl true
-      def init({topic_name, nil, subscription, consumer_opts}) do
+      def init({topic_name, nil, subscription, consumer_opts, cluster_opts}) do
         case Topic.parse(topic_name) do
-          {:ok, %Topic{} = topic} -> init({topic, subscription, consumer_opts})
+          {:ok, %Topic{} = topic} -> init({topic, subscription, consumer_opts, cluster_opts})
           err -> {:stop, err}
         end
       end
 
       @impl true
-      def init({topic_name, partition, subscription, consumer_opts}) do
+      def init({topic_name, partition, subscription, consumer_opts, cluster_opts}) do
         case Topic.parse(topic_name) do
           {:ok, %Topic{} = topic} ->
-            init({%{topic | partition: partition}, subscription, consumer_opts})
+            init({%{topic | partition: partition}, subscription, consumer_opts, cluster_opts})
 
           err ->
             {:stop, err}
@@ -147,26 +154,33 @@ defmodule PulsarEx.Consumer do
       end
 
       @impl true
-      def init({%Topic{} = topic, subscription, consumer_opts}) do
+      def init({%Topic{} = topic, subscription, consumer_opts, cluster_opts}) do
+        cluster = Keyword.get(cluster_opts, :cluster, :default)
+
         Process.flag(:trap_exit, true)
 
         topic_name = Topic.to_name(topic)
 
         Logger.debug(
-          "Starting consumer for topic #{topic_name} with subscription #{subscription}"
+          "Starting consumer for topic #{topic_name} with subscription #{subscription}, on cluster #{cluster}"
         )
 
         topic_logical_name = Topic.to_logical_name(topic)
 
         metadata =
           if topic.partition == nil do
-            %{topic: topic_logical_name, subscription: subscription}
+            %{cluster: cluster, topic: topic_logical_name, subscription: subscription}
           else
-            %{topic: topic_logical_name, partition: topic.partition, subscription: subscription}
+            %{
+              cluster: cluster,
+              topic: topic_logical_name,
+              partition: topic.partition,
+              subscription: subscription
+            }
           end
 
-        brokers = Application.fetch_env!(:pulsar_ex, :brokers)
-        admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
+        brokers = Keyword.fetch!(cluster_opts, :brokers)
+        admin_port = Keyword.fetch!(cluster_opts, :admin_port)
 
         subscription_type = Keyword.get(consumer_opts, :subscription_type, @subscription_type)
 
@@ -215,6 +229,8 @@ defmodule PulsarEx.Consumer do
           min(Keyword.get(consumer_opts, :max_connection_attempts, @max_connection_attempts), 10)
 
         state = %State{
+          cluster: cluster,
+          cluster_opts: cluster_opts,
           state: :connecting,
           topic: topic,
           topic_name: topic_name,
@@ -270,7 +286,7 @@ defmodule PulsarEx.Consumer do
         state = %{state | connection_ref: nil}
 
         with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
-             {:ok, connection} <- ConnectionManager.get_connection(broker),
+             {:ok, connection} <- ConnectionManager.get_connection(state.cluster, broker),
              {:ok, reply} <-
                Connection.subscribe(
                  connection,
@@ -324,7 +340,7 @@ defmodule PulsarEx.Consumer do
           }
 
           Logger.debug(
-            "Subscribed consumer for topic #{state.topic_name} with subscription #{state.subscription}"
+            "Subscribed consumer for topic #{state.topic_name} with subscription #{state.subscription}, on cluster #{state.cluster}"
           )
 
           :telemetry.execute(
@@ -337,7 +353,7 @@ defmodule PulsarEx.Consumer do
         else
           err ->
             Logger.debug(
-              "Error subscribing consumer for topic #{state.topic_name} with subscription #{state.subscription}, #{inspect(err)}"
+              "Error subscribing consumer for topic #{state.topic_name} with subscription #{state.subscription}, on cluster #{state.cluster}, #{inspect(err)}"
             )
 
             :telemetry.execute(
@@ -364,7 +380,9 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_info({:DOWN, _, _, _, _}, state) do
-        Logger.error("Connection down for consumer with topic #{state.topic_name}")
+        Logger.error(
+          "Connection down for consumer with topic #{state.topic_name}, on cluster #{state.cluster}"
+        )
 
         :telemetry.execute(
           [:pulsar_ex, :consumer, :connection_down],
@@ -420,7 +438,7 @@ defmodule PulsarEx.Consumer do
             case Connection.ack(state.connection, state.consumer_id, :individual, available_acks) do
               :ok ->
                 Logger.debug(
-                  "Sent #{total_acks} acks from consumer #{state.consumer_id} for topic #{state.topic_name}"
+                  "Sent #{total_acks} acks from consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}"
                 )
 
                 :telemetry.execute(
@@ -451,7 +469,7 @@ defmodule PulsarEx.Consumer do
 
               {:error, err} ->
                 Logger.error(
-                  "Error sending #{total_acks} acks from consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(err)}"
+                  "Error sending #{total_acks} acks from consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(err)}"
                 )
 
                 :telemetry.execute(
@@ -499,7 +517,7 @@ defmodule PulsarEx.Consumer do
             case Connection.redeliver(state.connection, state.consumer_id, available_nacks) do
               :ok ->
                 Logger.debug(
-                  "Sent #{total_nacks} nacks from consumer #{state.consumer_id} for topic #{state.topic_name}"
+                  "Sent #{total_nacks} nacks from consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}"
                 )
 
                 :telemetry.execute(
@@ -523,7 +541,7 @@ defmodule PulsarEx.Consumer do
 
               {:error, err} ->
                 Logger.error(
-                  "Error sending #{total_nacks} nacks from consumer #{state.consumer_id} for topc #{state.topic_name}, #{inspect(err)}"
+                  "Error sending #{total_nacks} nacks from consumer #{state.consumer_id} for topc #{state.topic_name}, on cluster #{state.cluster}, #{inspect(err)}"
                 )
 
                 :telemetry.execute(
@@ -583,7 +601,7 @@ defmodule PulsarEx.Consumer do
               Logger.error(Exception.format(:error, err, __STACKTRACE__))
 
               Logger.error(
-                "Error handling batch of #{length(batch)} messages from consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(err)}"
+                "Error handling batch of #{length(batch)} messages from consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(err)}"
               )
 
               Enum.map(batch, fn _ -> {:error, err} end)
@@ -636,7 +654,7 @@ defmodule PulsarEx.Consumer do
         case Connection.flow_permits(state.connection, state.consumer_id, state.permits) do
           :ok ->
             Logger.debug(
-              "Sent #{state.permits} permits from consumer #{state.consumer_id} for topic #{state.topic_name}"
+              "Sent #{state.permits} permits from consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}"
             )
 
             :telemetry.execute(
@@ -660,7 +678,7 @@ defmodule PulsarEx.Consumer do
 
           {:error, err} ->
             Logger.error(
-              "Error sending #{state.permits} permits from consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(err)}"
+              "Error sending #{state.permits} permits from consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(err)}"
             )
 
             :telemetry.execute(
@@ -677,7 +695,7 @@ defmodule PulsarEx.Consumer do
       @impl true
       def handle_cast({:ack_response, message_ids}, %State{} = state) do
         Logger.debug(
-          "Received #{length(message_ids)} acked message_ids for consumer #{state.consumer_id} from topic #{state.topic_name}"
+          "Received #{length(message_ids)} acked message_ids for consumer #{state.consumer_id} from topic #{state.topic_name}, on cluster #{state.cluster}"
         )
 
         :telemetry.execute(
@@ -697,7 +715,7 @@ defmodule PulsarEx.Consumer do
       @impl true
       def handle_cast({:messages, messages}, %State{} = state) do
         Logger.debug(
-          "Received #{length(messages)} messages for consumer #{state.consumer_id} from topic #{state.topic_name}"
+          "Received #{length(messages)} messages for consumer #{state.consumer_id} from topic #{state.topic_name}, on cluster #{state.cluster}"
         )
 
         :telemetry.execute(
@@ -714,7 +732,7 @@ defmodule PulsarEx.Consumer do
           end)
 
         Logger.debug(
-          "Received #{length(dead_letters)} dead letter messages for consumer #{state.consumer_id} from topic #{state.topic_name}"
+          "Received #{length(dead_letters)} dead letter messages for consumer #{state.consumer_id} from topic #{state.topic_name}, on cluster #{state.cluster}"
         )
 
         :telemetry.execute(
@@ -768,7 +786,9 @@ defmodule PulsarEx.Consumer do
 
       @impl true
       def handle_cast(:close, state) do
-        Logger.warn("Received close command from connection for topic #{state.topic_name}")
+        Logger.warn(
+          "Received close command from connection for topic #{state.topic_name}, on cluster #{state.cluster}"
+        )
 
         :telemetry.execute(
           [:pulsar_ex, :consumer, :close],
@@ -803,35 +823,35 @@ defmodule PulsarEx.Consumer do
       def terminate(reason, state) do
         if Enum.count(state.acks) > 0 do
           Logger.error(
-            "Stopping consumer while #{Enum.count(state.acks)} acks are still left in consumer #{state.consumer_id} for topic #{state.topic_name}"
+            "Stopping consumer while #{Enum.count(state.acks)} acks are still left in consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}"
           )
         end
 
         case reason do
           :shutdown ->
             Logger.debug(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(reason)}"
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(reason)}"
             )
 
             state
 
           :normal ->
             Logger.debug(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(reason)}"
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(reason)}"
             )
 
             state
 
           {:shutdown, _} ->
             Logger.debug(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(reason)}"
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(reason)}"
             )
 
             state
 
           _ ->
             Logger.error(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(reason)}"
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(reason)}"
             )
 
             :telemetry.execute(

@@ -1,20 +1,24 @@
 defmodule PulsarEx.ConnectionSupervisor do
   use Supervisor
 
-  alias PulsarEx.{ConnectionRegistry, ConnectionManager, Connections}
+  alias PulsarEx.ConnectionManager
 
-  def start_link(_) do
-    Supervisor.start_link(__MODULE__, :init, name: __MODULE__)
+  def start_link(cluster_opts) do
+    cluster = Keyword.get(cluster_opts, :cluster, :default)
+    Supervisor.start_link(__MODULE__, cluster_opts, name: name(cluster))
   end
 
   @impl true
-  def init(:init) do
+  def init(cluster_opts) do
+    cluster = Keyword.get(cluster_opts, :cluster, :default)
+
     children = [
-      {Registry, keys: :unique, name: ConnectionRegistry, partitions: System.schedulers_online()},
-      {DynamicSupervisor, strategy: :one_for_one, name: Connections},
-      ConnectionManager
+      {DynamicSupervisor, strategy: :one_for_one, name: ConnectionManager.connections(cluster)},
+      {ConnectionManager, cluster_opts}
     ]
 
     Supervisor.init(children, strategy: :one_for_all)
   end
+
+  defp name(cluster), do: String.to_atom("#{__MODULE__}.#{cluster}")
 end

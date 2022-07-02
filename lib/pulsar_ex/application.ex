@@ -3,16 +3,18 @@ defmodule PulsarEx.Application do
 
   use Application
 
-  @tab :pulsar_globals
-  @num_executors 5
-
   alias PulsarEx.{
-    PartitionManager,
-    ConnectionSupervisor,
-    ProducerSupervisor,
-    ConsumerSupervisor,
-    SignalHandler
+    SignalHandler,
+    ClusterSupervisor,
+    ConnectionRegistry,
+    ProducerRegistry,
+    ConsumerRegistry
   }
+
+  @tab :pulsar_globals
+  @partitions_table :pulsar_partitions
+
+  def partitions_table(), do: @partitions_table
 
   def shutdown!() do
     :ets.insert(@tab, {:shutdown, true})
@@ -34,26 +36,36 @@ defmodule PulsarEx.Application do
 
     SignalHandler.start_link()
 
-    num_executors = Application.get_env(:pulsar_ex, :num_executors, @num_executors)
-    executors_overflow = round(num_executors * 0.2)
-
-    executors_opts = [
-      name: {:local, :pulsar_ex_executors},
-      worker_module: PulsarEx.Executor,
-      size: num_executors,
-      max_overflow: executors_overflow,
-      strategy: :fifo
-    ]
+    :ets.new(@partitions_table, [
+      :named_table,
+      :set,
+      :public,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
 
     children = [
-      :poolboy.child_spec(:pulsar_ex_executors, executors_opts),
-      PartitionManager,
-      ConnectionSupervisor,
-      ProducerSupervisor,
-      ConsumerSupervisor
+      {Registry, keys: :unique, name: ConnectionRegistry, partitions: System.schedulers_online()},
+      {Registry, keys: :unique, name: ProducerRegistry, partitions: System.schedulers_online()},
+      {Registry, keys: :unique, name: ConsumerRegistry, partitions: System.schedulers_online()}
     ]
 
-    opts = [strategy: :rest_for_one, name: PulsarEx.Supervisor]
+    clusters =
+      Application.get_all_env(:pulsar_ex)
+      |> Keyword.drop([:shutdown_timeout, :producer_module])
+      |> Keyword.pop(:clusters, [])
+      |> case do
+        {clusters, []} -> clusters
+        {clusters, cluster} -> [cluster | clusters]
+      end
+      |> Enum.map(fn cluster_opts ->
+        cluster = Keyword.get(cluster_opts, :cluster, :default)
+        Supervisor.child_spec({ClusterSupervisor, cluster_opts}, id: {ClusterSupervisor, cluster})
+      end)
+
+    children = children ++ clusters
+
+    opts = [strategy: :one_for_one, name: PulsarEx.Supervisor]
     Supervisor.start_link(children, opts)
   end
 end

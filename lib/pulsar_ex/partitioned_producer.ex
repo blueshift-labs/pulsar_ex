@@ -1,6 +1,8 @@
 defmodule PulsarEx.PartitionedProducer do
   defmodule State do
     @enforce_keys [
+      :cluster,
+      :cluster_opts,
       :state,
       :brokers,
       :admin_port,
@@ -24,6 +26,8 @@ defmodule PulsarEx.PartitionedProducer do
       :max_connection_attempts
     ]
     defstruct [
+      :cluster,
+      :cluster_opts,
       :state,
       :brokers,
       :admin_port,
@@ -80,29 +84,33 @@ defmodule PulsarEx.PartitionedProducer do
     GenServer.cast(pid, {:produce, payload, message_opts})
   end
 
-  def start_link({topic_name, partition, producer_opts}) do
-    GenServer.start_link(__MODULE__, {topic_name, partition, producer_opts})
+  def start_link({topic_name, partition, producer_opts, cluster_opts}) do
+    GenServer.start_link(__MODULE__, {topic_name, partition, producer_opts, cluster_opts})
   end
 
   @impl true
-  def init({topic_name, partition, producer_opts}) do
+  def init({topic_name, partition, producer_opts, cluster_opts}) do
+    cluster = Keyword.get(cluster_opts, :cluster, :default)
+
     Process.flag(:trap_exit, true)
 
-    Logger.debug("Starting producer for topic #{topic_name}")
+    Logger.debug("Starting producer for topic #{topic_name}, on cluster #{cluster}")
 
-    brokers = Application.fetch_env!(:pulsar_ex, :brokers)
-    admin_port = Application.fetch_env!(:pulsar_ex, :admin_port)
+    brokers = Keyword.fetch!(cluster_opts, :brokers)
+    admin_port = Keyword.fetch!(cluster_opts, :admin_port)
 
     {:ok, topic} = Topic.parse(topic_name)
 
     metadata =
       if partition == nil do
-        %{topic: topic_name}
+        %{cluster: cluster, topic: topic_name}
       else
-        %{topic: topic_name, partition: partition}
+        %{cluster: cluster, topic: topic_name, partition: partition}
       end
 
     state = %State{
+      cluster: cluster,
+      cluster_opts: cluster_opts,
       state: :connecting,
       brokers: brokers,
       admin_port: admin_port,
@@ -142,7 +150,7 @@ defmodule PulsarEx.PartitionedProducer do
     state = %{state | connection_ref: nil}
 
     with {:ok, broker} <- Admin.lookup_topic(state.brokers, state.admin_port, state.topic),
-         {:ok, connection} <- ConnectionManager.get_connection(broker),
+         {:ok, connection} <- ConnectionManager.get_connection(state.cluster, broker),
          {:ok, reply} <-
            Connection.create_producer(
              connection,
@@ -181,7 +189,7 @@ defmodule PulsarEx.PartitionedProducer do
       }
 
       Logger.debug(
-        "Connected producer #{state.producer_id} for topic #{state.topic_name} to broker #{state.broker_name}"
+        "Connected producer #{state.producer_id} for topic #{state.topic_name} to broker #{state.broker_name}, on cluster #{state.cluster}"
       )
 
       :telemetry.execute(
@@ -194,14 +202,18 @@ defmodule PulsarEx.PartitionedProducer do
     else
       # This happens when connection first establish, simply retry
       {:error, :invalid_message} = err ->
-        Logger.debug("Error connecting producer for topic #{state.topic_name}, #{inspect(err)}")
+        Logger.debug(
+          "Error connecting producer for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(err)}"
+        )
 
         Process.send_after(self(), :connect, @connection_interval)
 
         {:noreply, state}
 
       err ->
-        Logger.error("Error connecting producer for topic #{state.topic_name}, #{inspect(err)}")
+        Logger.error(
+          "Error connecting producer for topic #{state.topic_name}, on cluster #{state.cluster}, #{inspect(err)}"
+        )
 
         :telemetry.execute(
           [:pulsar_ex, :producer, :connect, :error],
@@ -224,7 +236,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_info({:DOWN, _, _, _, _}, %{topic_name: topic_name} = state) do
     Logger.error(
-      "Connection down in producer #{state.producer_id} for topic #{topic_name} to broker #{state.broker_name}"
+      "Connection down in producer #{state.producer_id} for topic #{topic_name} to broker #{state.broker_name}, on cluster #{state.cluster}"
     )
 
     :telemetry.execute(
@@ -457,7 +469,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast({:send_response, _}, %{pending_send: nil} = state) do
     Logger.warn(
-      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}"
+      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, on cluster #{state.cluster}"
     )
 
     :telemetry.execute(
@@ -473,7 +485,7 @@ defmodule PulsarEx.PartitionedProducer do
   def handle_cast({:send_response, {sequence_id, _}}, %{pending_send: {seq_id, _, _}} = state)
       when sequence_id != seq_id do
     Logger.warn(
-      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}"
+      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, on cluster #{state.cluster}"
     )
 
     :telemetry.execute(
@@ -494,7 +506,7 @@ defmodule PulsarEx.PartitionedProducer do
     duration = System.monotonic_time(:millisecond) - milli_ts
 
     Logger.debug(
-      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name} after #{duration}ms"
+      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name} after #{duration}ms, on cluster #{state.cluster}"
     )
 
     case reply do
@@ -526,7 +538,7 @@ defmodule PulsarEx.PartitionedProducer do
     duration = System.monotonic_time(:millisecond) - milli_ts
 
     Logger.debug(
-      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name} after #{duration}ms"
+      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name} after #{duration}ms, on cluster #{state.cluster}"
     )
 
     case reply do
@@ -553,7 +565,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast(:close, state) do
     Logger.warn(
-      "Received close command in producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}"
+      "Received close command in producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, on cluster #{state.cluster}"
     )
 
     :telemetry.execute(
@@ -573,28 +585,28 @@ defmodule PulsarEx.PartitionedProducer do
     case reason do
       :shutdown ->
         Logger.debug(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, #{inspect(reason)}"
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
         )
 
         state
 
       :normal ->
         Logger.debug(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, #{inspect(reason)}"
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
         )
 
         state
 
       {:shutdown, _} ->
         Logger.debug(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, #{inspect(reason)}"
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
         )
 
         state
 
       _ ->
         Logger.error(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, #{inspect(reason)}"
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
         )
 
         :telemetry.execute(
