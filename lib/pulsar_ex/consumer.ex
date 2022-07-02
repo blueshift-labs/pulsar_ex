@@ -324,9 +324,7 @@ defmodule PulsarEx.Consumer do
           }
 
           Logger.debug(
-            "Subscribed consumer for topic #{state.topic_name} with subscription #{
-              state.subscription
-            }"
+            "Subscribed consumer for topic #{state.topic_name} with subscription #{state.subscription}"
           )
 
           :telemetry.execute(
@@ -339,9 +337,7 @@ defmodule PulsarEx.Consumer do
         else
           err ->
             Logger.debug(
-              "Error subscribing consumer for topic #{state.topic_name} with subscription #{
-                state.subscription
-              }, #{inspect(err)}"
+              "Error subscribing consumer for topic #{state.topic_name} with subscription #{state.subscription}, #{inspect(err)}"
             )
 
             :telemetry.execute(
@@ -424,9 +420,7 @@ defmodule PulsarEx.Consumer do
             case Connection.ack(state.connection, state.consumer_id, :individual, available_acks) do
               :ok ->
                 Logger.debug(
-                  "Sent #{total_acks} acks from consumer #{state.consumer_id} for topic #{
-                    state.topic_name
-                  }"
+                  "Sent #{total_acks} acks from consumer #{state.consumer_id} for topic #{state.topic_name}"
                 )
 
                 :telemetry.execute(
@@ -457,9 +451,7 @@ defmodule PulsarEx.Consumer do
 
               {:error, err} ->
                 Logger.error(
-                  "Error sending #{total_acks} acks from consumer #{state.consumer_id} for topic #{
-                    state.topic_name
-                  }, #{inspect(err)}"
+                  "Error sending #{total_acks} acks from consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(err)}"
                 )
 
                 :telemetry.execute(
@@ -507,9 +499,7 @@ defmodule PulsarEx.Consumer do
             case Connection.redeliver(state.connection, state.consumer_id, available_nacks) do
               :ok ->
                 Logger.debug(
-                  "Sent #{total_nacks} nacks from consumer #{state.consumer_id} for topic #{
-                    state.topic_name
-                  }"
+                  "Sent #{total_nacks} nacks from consumer #{state.consumer_id} for topic #{state.topic_name}"
                 )
 
                 :telemetry.execute(
@@ -533,9 +523,7 @@ defmodule PulsarEx.Consumer do
 
               {:error, err} ->
                 Logger.error(
-                  "Error sending #{total_nacks} nacks from consumer #{state.consumer_id} for topc #{
-                    state.topic_name
-                  }, #{inspect(err)}"
+                  "Error sending #{total_nacks} nacks from consumer #{state.consumer_id} for topc #{state.topic_name}, #{inspect(err)}"
                 )
 
                 :telemetry.execute(
@@ -595,9 +583,7 @@ defmodule PulsarEx.Consumer do
               Logger.error(Exception.format(:error, err, __STACKTRACE__))
 
               Logger.error(
-                "Error handling batch of #{length(batch)} messages from consumer #{
-                  state.consumer_id
-                } for topic #{state.topic_name}, #{inspect(err)}"
+                "Error handling batch of #{length(batch)} messages from consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(err)}"
               )
 
               Enum.map(batch, fn _ -> {:error, err} end)
@@ -650,9 +636,7 @@ defmodule PulsarEx.Consumer do
         case Connection.flow_permits(state.connection, state.consumer_id, state.permits) do
           :ok ->
             Logger.debug(
-              "Sent #{state.permits} permits from consumer #{state.consumer_id} for topic #{
-                state.topic_name
-              }"
+              "Sent #{state.permits} permits from consumer #{state.consumer_id} for topic #{state.topic_name}"
             )
 
             :telemetry.execute(
@@ -676,9 +660,7 @@ defmodule PulsarEx.Consumer do
 
           {:error, err} ->
             Logger.error(
-              "Error sending #{state.permits} permits from consumer #{state.consumer_id} for topic #{
-                state.topic_name
-              }, #{inspect(err)}"
+              "Error sending #{state.permits} permits from consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(err)}"
             )
 
             :telemetry.execute(
@@ -695,9 +677,7 @@ defmodule PulsarEx.Consumer do
       @impl true
       def handle_cast({:ack_response, message_ids}, %State{} = state) do
         Logger.debug(
-          "Received #{length(message_ids)} acked message_ids for consumer #{state.consumer_id} from topic #{
-            state.topic_name
-          }"
+          "Received #{length(message_ids)} acked message_ids for consumer #{state.consumer_id} from topic #{state.topic_name}"
         )
 
         :telemetry.execute(
@@ -717,9 +697,7 @@ defmodule PulsarEx.Consumer do
       @impl true
       def handle_cast({:messages, messages}, %State{} = state) do
         Logger.debug(
-          "Received #{length(messages)} messages for consumer #{state.consumer_id} from topic #{
-            state.topic_name
-          }"
+          "Received #{length(messages)} messages for consumer #{state.consumer_id} from topic #{state.topic_name}"
         )
 
         :telemetry.execute(
@@ -736,9 +714,7 @@ defmodule PulsarEx.Consumer do
           end)
 
         Logger.debug(
-          "Received #{length(dead_letters)} dead letter messages for consumer #{state.consumer_id} from topic #{
-            state.topic_name
-          }"
+          "Received #{length(dead_letters)} dead letter messages for consumer #{state.consumer_id} from topic #{state.topic_name}"
         )
 
         :telemetry.execute(
@@ -827,45 +803,35 @@ defmodule PulsarEx.Consumer do
       def terminate(reason, state) do
         if Enum.count(state.acks) > 0 do
           Logger.error(
-            "Stopping consumer while #{Enum.count(state.acks)} acks are still left in consumer #{
-              state.consumer_id
-            } for topic #{state.topic_name}"
+            "Stopping consumer while #{Enum.count(state.acks)} acks are still left in consumer #{state.consumer_id} for topic #{state.topic_name}"
           )
         end
 
         case reason do
           :shutdown ->
             Logger.debug(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
-                inspect(reason)
-              }"
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(reason)}"
             )
 
             state
 
           :normal ->
             Logger.debug(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
-                inspect(reason)
-              }"
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(reason)}"
             )
 
             state
 
           {:shutdown, _} ->
             Logger.debug(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
-                inspect(reason)
-              }"
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(reason)}"
             )
 
             state
 
           _ ->
             Logger.error(
-              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{
-                inspect(reason)
-              }"
+              "Stopping consumer #{state.consumer_id} for topic #{state.topic_name}, #{inspect(reason)}"
             )
 
             :telemetry.execute(

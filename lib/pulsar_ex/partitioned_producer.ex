@@ -181,9 +181,7 @@ defmodule PulsarEx.PartitionedProducer do
       }
 
       Logger.debug(
-        "Connected producer #{state.producer_id} for topic #{state.topic_name} to broker #{
-          state.broker_name
-        }"
+        "Connected producer #{state.producer_id} for topic #{state.topic_name} to broker #{state.broker_name}"
       )
 
       :telemetry.execute(
@@ -226,9 +224,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_info({:DOWN, _, _, _, _}, %{topic_name: topic_name} = state) do
     Logger.error(
-      "Connection down in producer #{state.producer_id} for topic #{topic_name} to broker #{
-        state.broker_name
-      }"
+      "Connection down in producer #{state.producer_id} for topic #{topic_name} to broker #{state.broker_name}"
     )
 
     :telemetry.execute(
@@ -461,9 +457,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast({:send_response, _}, %{pending_send: nil} = state) do
     Logger.warn(
-      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
-        state.broker_name
-      }"
+      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}"
     )
 
     :telemetry.execute(
@@ -479,9 +473,7 @@ defmodule PulsarEx.PartitionedProducer do
   def handle_cast({:send_response, {sequence_id, _}}, %{pending_send: {seq_id, _, _}} = state)
       when sequence_id != seq_id do
     Logger.warn(
-      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
-        state.broker_name
-      }"
+      "Received stale send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}"
     )
 
     :telemetry.execute(
@@ -502,9 +494,7 @@ defmodule PulsarEx.PartitionedProducer do
     duration = System.monotonic_time(:millisecond) - milli_ts
 
     Logger.debug(
-      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
-        state.broker_name
-      } after #{duration}ms"
+      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name} after #{duration}ms"
     )
 
     case reply do
@@ -536,9 +526,7 @@ defmodule PulsarEx.PartitionedProducer do
     duration = System.monotonic_time(:millisecond) - milli_ts
 
     Logger.debug(
-      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{
-        state.broker_name
-      } after #{duration}ms"
+      "Received send response in #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name} after #{duration}ms"
     )
 
     case reply do
@@ -565,9 +553,7 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast(:close, state) do
     Logger.warn(
-      "Received close command in producer #{state.producer_id} for topic #{state.topic_name} from broker #{
-        state.broker_name
-      }"
+      "Received close command in producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}"
     )
 
     :telemetry.execute(
@@ -587,36 +573,28 @@ defmodule PulsarEx.PartitionedProducer do
     case reason do
       :shutdown ->
         Logger.debug(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{
-            state.broker_name
-          }, #{inspect(reason)}"
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, #{inspect(reason)}"
         )
 
         state
 
       :normal ->
         Logger.debug(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{
-            state.broker_name
-          }, #{inspect(reason)}"
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, #{inspect(reason)}"
         )
 
         state
 
       {:shutdown, _} ->
         Logger.debug(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{
-            state.broker_name
-          }, #{inspect(reason)}"
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, #{inspect(reason)}"
         )
 
         state
 
       _ ->
         Logger.error(
-          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{
-            state.broker_name
-          }, #{inspect(reason)}"
+          "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, #{inspect(reason)}"
         )
 
         :telemetry.execute(

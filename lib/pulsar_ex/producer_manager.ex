@@ -79,9 +79,7 @@ defmodule PulsarEx.ProducerManager do
 
       {:error, err} ->
         Logger.error(
-          "Error starting producer for topic #{topic_name}, partition #{partition}, #{
-            inspect(err)
-          }"
+          "Error starting producer for topic #{topic_name}, partition #{partition}, #{inspect(err)}"
         )
     end
 

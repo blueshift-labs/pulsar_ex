@@ -345,9 +345,7 @@ defmodule PulsarEx.ConsumerManager do
 
   defp do_start_consumer(topic_name, partition, subscription, module, consumer_opts) do
     Logger.debug(
-      "Starting consumer for topic #{topic_name}, partition #{partition} with subscription #{
-        subscription
-      }"
+      "Starting consumer for topic #{topic_name}, partition #{partition} with subscription #{subscription}"
     )
 
     DynamicSupervisor.start_child(
@@ -357,9 +355,7 @@ defmodule PulsarEx.ConsumerManager do
     |> case do
       {:ok, _} ->
         Logger.debug(
-          "Started consumer for topic #{topic_name}, partition #{partition} with subscription #{
-            subscription
-          }"
+          "Started consumer for topic #{topic_name}, partition #{partition} with subscription #{subscription}"
         )
 
         nil
@@ -369,9 +365,7 @@ defmodule PulsarEx.ConsumerManager do
 
       {:error, err} ->
         Logger.error(
-          "Error starting consumer for topic #{topic_name}, partition #{partition} with subscription #{
-            subscription
-          }, #{inspect(err)}"
+          "Error starting consumer for topic #{topic_name}, partition #{partition} with subscription #{subscription}, #{inspect(err)}"
         )
 
         {:error, err}

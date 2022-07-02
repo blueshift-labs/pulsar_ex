@@ -23,9 +23,7 @@ defmodule PulsarEx.Worker do
 
       if Keyword.get(opts, :batch_enabled) do
         Logger.warn(
-          "Workers should not be configured with batch_enabled, ignoring batch settings. #{
-            inspect(opts)
-          }"
+          "Workers should not be configured with batch_enabled, ignoring batch settings. #{inspect(opts)}"
         )
       end
 
