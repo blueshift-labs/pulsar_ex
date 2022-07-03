@@ -60,6 +60,8 @@ defmodule PulsarEx.Application do
       end
       |> Enum.map(fn cluster_opts ->
         cluster = Keyword.get(cluster_opts, :cluster, :default)
+        cluster = String.to_atom("#{cluster}")
+        cluster_opts = Keyword.put(cluster_opts, :cluster, cluster)
         Supervisor.child_spec({ClusterSupervisor, cluster_opts}, id: {ClusterSupervisor, cluster})
       end)
 
