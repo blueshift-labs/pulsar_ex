@@ -3,6 +3,8 @@ defmodule PulsarEx.Application do
 
   use Application
 
+  require Logger
+
   alias PulsarEx.{
     SignalHandler,
     ClusterSupervisor,
@@ -67,6 +69,9 @@ defmodule PulsarEx.Application do
 
     children = children ++ clusters
 
+    Logger.info(inspect(Application.get_all_env(:pulsar_ex)))
+
+    Logger.info(inspect(children))
     opts = [strategy: :one_for_one, name: PulsarEx.Supervisor]
     Supervisor.start_link(children, opts)
   end
