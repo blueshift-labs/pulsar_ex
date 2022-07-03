@@ -2,6 +2,7 @@ defmodule PulsarEx.Worker do
   def compile_config(module, opts) do
     {otp_app, opts} = Keyword.pop!(opts, :otp_app)
     opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
+    {cluster, opts} = Keyword.pop(opts, :cluster, :default)
     {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
     {use_executor, opts} = Keyword.pop(opts, :use_executor, false)
@@ -10,13 +11,13 @@ defmodule PulsarEx.Worker do
     {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
     {producer_opts, opts} = Keyword.pop(opts, :producer_opts, [])
 
-    {otp_app, subscription, jobs, use_executor, exec_timeout, inline, middlewares, producer_opts,
-     opts}
+    {otp_app, cluster, subscription, jobs, use_executor, exec_timeout, inline, middlewares,
+     producer_opts, opts}
   end
 
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
-      {otp_app, subscription, jobs, use_executor, exec_timeout, inline, middlewares,
+      {otp_app, cluster, subscription, jobs, use_executor, exec_timeout, inline, middlewares,
        producer_opts, opts} = PulsarEx.Worker.compile_config(__MODULE__, opts)
 
       require Logger
@@ -40,6 +41,7 @@ defmodule PulsarEx.Worker do
       alias PulsarEx.{JobState, ConsumerMessage}
 
       @otp_app otp_app
+      @cluster cluster
       @topic Keyword.get(opts, :topic)
       @subscription subscription
       @jobs jobs
@@ -50,6 +52,10 @@ defmodule PulsarEx.Worker do
       @middlewares @default_middlewares ++ middlewares
       @producer_opts producer_opts
       @opts opts
+
+      def cluster() do
+        @cluster
+      end
 
       def subscription() do
         @subscription
@@ -82,6 +88,7 @@ defmodule PulsarEx.Worker do
 
         handler = fn ->
           job_handler().(%JobState{
+            cluster: @cluster,
             worker: __MODULE__,
             topic: state.topic_name,
             subscription: @subscription,
@@ -104,7 +111,7 @@ defmodule PulsarEx.Worker do
         job_state =
           if @use_executor do
             :poolboy.transaction(
-              :pulsar_ex_executors,
+              PulsarEx.Executor.name(@cluster),
               &PulsarEx.Executor.exec(&1, handler, @exec_timeout)
             )
           else
@@ -155,7 +162,8 @@ defmodule PulsarEx.Worker do
             |> Map.put("job", job)
 
           reply =
-            PulsarEx.produce(
+            PulsarEx.Clusters.produce(
+              @cluster,
               topic,
               Jason.encode!(params),
               Keyword.merge(message_opts,
@@ -170,14 +178,14 @@ defmodule PulsarEx.Worker do
               :telemetry.execute(
                 [:pulsar_ex, :worker, :enqueue, :success],
                 %{count: 1, duration: System.monotonic_time() - start},
-                %{topic: topic, job: job}
+                %{cluster: @cluster, topic: topic, job: job}
               )
 
             {:error, _} ->
               :telemetry.execute(
                 [:pulsar_ex, :worker, :enqueue, :error],
                 %{count: 1},
-                %{topic: topic, job: job}
+                %{cluster: @cluster, topic: topic, job: job}
               )
           end
 
@@ -196,6 +204,7 @@ defmodule PulsarEx.Worker do
 
         job_state =
           job_handler().(%JobState{
+            cluster: @cluster,
             worker: __MODULE__,
             topic: topic,
             subscription: @subscription,
@@ -241,10 +250,18 @@ defmodule PulsarEx.Worker do
             {tenant, opts} = Keyword.pop!(opts, :tenant)
             {namespace, opts} = Keyword.pop!(opts, :namespace)
 
-            PulsarEx.start_consumer(tenant, namespace, regex, @subscription, __MODULE__, opts)
+            PulsarEx.Clusters.start_consumer(
+              @cluster,
+              tenant,
+              namespace,
+              regex,
+              @subscription,
+              __MODULE__,
+              opts
+            )
 
           {_, nil} ->
-            PulsarEx.start_consumer(topic, @subscription, __MODULE__, opts)
+            PulsarEx.Clusters.start_consumer(@cluster, topic, @subscription, __MODULE__, opts)
         end
       end
 
@@ -262,10 +279,10 @@ defmodule PulsarEx.Worker do
             {tenant, opts} = Keyword.pop!(opts, :tenant)
             {namespace, opts} = Keyword.pop!(opts, :namespace)
 
-            PulsarEx.stop_consumer(tenant, namespace, regex, @subscription)
+            PulsarEx.Clusters.stop_consumer(@cluster, tenant, namespace, regex, @subscription)
 
           {_, nil} ->
-            PulsarEx.stop_consumer(topic, @subscription)
+            PulsarEx.Clusters.stop_consumer(@cluster, topic, @subscription)
         end
       end
     end

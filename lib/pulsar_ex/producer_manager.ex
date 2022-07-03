@@ -1,17 +1,35 @@
 defmodule PulsarEx.ProducerManager do
+  defmodule State do
+    @enforce_keys [
+      :cluster,
+      :cluster_opts
+    ]
+
+    defstruct [
+      :cluster,
+      :cluster_opts
+    ]
+  end
+
   use GenServer
 
   require Logger
 
-  alias PulsarEx.{Producers, ProducerRegistry, PartitionedProducer, PartitionManager, Topic}
+  alias PulsarEx.{ProducerRegistry, PartitionedProducer, PartitionManager, Topic}
 
   @num_producers 1
   @connection_timeout 60_000
 
-  def get_producer(topic_name, partition, opts \\ []) do
-    with [] <- Registry.lookup(ProducerRegistry, {topic_name, partition}),
+  def producers(cluster), do: String.to_atom("PulsarEx.Producers.#{cluster}")
+
+  def get_producer(cluster, topic_name, partition, producer_opts \\ []) do
+    with [] <- Registry.lookup(ProducerRegistry, {cluster, topic_name, partition}),
          {:ok, pool} <-
-           GenServer.call(__MODULE__, {:create, topic_name, partition, opts}, @connection_timeout) do
+           GenServer.call(
+             name(cluster),
+             {:create, topic_name, partition, producer_opts},
+             @connection_timeout
+           ) do
       {:ok, :poolboy.transaction(pool, & &1)}
     else
       [{pool, _}] ->
@@ -22,74 +40,87 @@ defmodule PulsarEx.ProducerManager do
     end
   end
 
-  def start_link(auto_start) do
-    GenServer.start_link(__MODULE__, auto_start, name: __MODULE__)
+  def start_link(cluster_opts) do
+    cluster = Keyword.get(cluster_opts, :cluster, :default)
+    GenServer.start_link(__MODULE__, cluster_opts, name: name(cluster))
   end
 
   @impl true
-  def init(false) do
-    Logger.debug("Starting producer manager")
-    {:ok, nil}
-  end
+  def init(cluster_opts) do
+    cluster = Keyword.get(cluster_opts, :cluster, :default)
+    Logger.debug("Starting producer manager, on cluster #{cluster}")
 
-  @impl true
-  def init(true) do
-    Logger.debug("Starting producer manager")
+    producer_opts = Keyword.get(cluster_opts, :producer_opts, [])
+    auto_start = Keyword.get(producer_opts, :auto_start, false)
 
-    Application.get_env(:pulsar_ex, :producers, [])
-    |> Enum.reduce_while(:ok, fn opts, :ok ->
-      topic_name = Keyword.fetch!(opts, :topic)
-      producer_opts = producer_opts(opts)
+    state = %State{
+      cluster: cluster,
+      cluster_opts: cluster_opts
+    }
 
-      case start_producers(topic_name, producer_opts) do
-        :ok -> {:cont, :ok}
-        {:error, _} = err -> {:halt, err}
+    if auto_start do
+      Keyword.get(cluster_opts, :producers, [])
+      |> Enum.reduce_while(:ok, fn producer_opts, :ok ->
+        topic_name = Keyword.fetch!(producer_opts, :topic)
+
+        case start_producers(topic_name, producer_opts, state) do
+          :ok -> {:cont, :ok}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+      |> case do
+        :ok -> {:ok, state}
+        err -> {:stop, err}
       end
-    end)
-    |> case do
-      :ok -> {:ok, nil}
-      err -> {:stop, err}
+    else
+      {:ok, state}
     end
   end
 
   @impl true
-  def handle_call({:create, topic_name, partition, opts}, _from, nil) do
-    with [] <- Registry.lookup(ProducerRegistry, {topic_name, partition}),
-         {:ok, pool} <- start_producer(topic_name, partition, producer_opts(opts)) do
-      {:reply, {:ok, pool}, nil}
+  def handle_call(
+        {:create, topic_name, partition, producer_opts},
+        _from,
+        %{cluster: cluster} = state
+      ) do
+    with [] <- Registry.lookup(ProducerRegistry, {cluster, topic_name, partition}),
+         {:ok, pool} <- start_producer(topic_name, partition, producer_opts, state) do
+      {:reply, {:ok, pool}, state}
     else
       [{pool, _}] ->
-        {:reply, {:ok, pool}, nil}
+        {:reply, {:ok, pool}, state}
 
       err ->
-        {:reply, err, nil}
+        {:reply, err, state}
     end
   end
 
-  defp start_producer(topic_name, partition, producer_opts) do
+  defp start_producer(topic_name, partition, producer_opts, %{cluster: cluster} = state) do
     started =
       DynamicSupervisor.start_child(
-        Producers,
-        producer_spec(topic_name, partition, producer_opts)
+        producers(cluster),
+        producer_spec(topic_name, partition, producer_opts, state)
       )
 
     case started do
       {:ok, _} ->
-        Logger.debug("Started producer for topic #{topic_name}, partition #{partition}")
+        Logger.debug(
+          "Started producer for topic #{topic_name}, partition #{partition}, on cluster #{cluster}"
+        )
 
       {:error, err} ->
         Logger.error(
-          "Error starting producer for topic #{topic_name}, partition #{partition}, #{inspect(err)}"
+          "Error starting producer for topic #{topic_name}, partition #{partition}, on cluster #{cluster}, #{inspect(err)}"
         )
     end
 
     started
   end
 
-  defp producer_opts(opts) do
+  defp producer_opts(producer_opts, cluster_opts) do
     Keyword.merge(
-      Application.get_env(:pulsar_ex, :producer_opts, []),
-      opts,
+      Keyword.get(cluster_opts, :producer_opts, []),
+      producer_opts,
       fn
         :properties, v1, v2 -> Keyword.merge(v1, v2)
         _, _, v -> v
@@ -97,21 +128,23 @@ defmodule PulsarEx.ProducerManager do
     )
   end
 
-  defp producer_spec(topic_name, partition, producer_opts) do
+  defp producer_spec(topic_name, partition, producer_opts, %{cluster: cluster} = state) do
+    producer_opts = producer_opts(producer_opts, state.cluster_opts)
+
     {
-      {topic_name, partition},
+      {cluster, topic_name, partition},
       {
         :poolboy,
         :start_link,
         [
           [
-            name: {:via, Registry, {ProducerRegistry, {topic_name, partition}}},
+            name: {:via, Registry, {ProducerRegistry, {cluster, topic_name, partition}}},
             worker_module: PartitionedProducer,
             size: Keyword.get(producer_opts, :num_producers, @num_producers),
             max_overflow: 0,
             strategy: :fifo
           ],
-          {topic_name, partition, producer_opts}
+          {topic_name, partition, producer_opts, state.cluster_opts}
         ]
       },
       :permanent,
@@ -121,13 +154,14 @@ defmodule PulsarEx.ProducerManager do
     }
   end
 
-  defp start_producers(topic_name, producer_opts) do
-    with {:ok, {%Topic{partition: nil}, partitions}} <- PartitionManager.lookup(topic_name) do
+  defp start_producers(topic_name, producer_opts, %{cluster: cluster} = state) do
+    with {:ok, {%Topic{partition: nil}, partitions}} <-
+           PartitionManager.lookup(cluster, topic_name) do
       partitions = if partitions > 0, do: 0..(partitions - 1), else: [nil]
 
       partitions
       |> Enum.reduce_while(:ok, fn partition, :ok ->
-        start_producer(topic_name, partition, producer_opts)
+        start_producer(topic_name, partition, producer_opts, state)
         |> case do
           {:ok, _} -> {:cont, :ok}
           err -> {:halt, err}
@@ -135,4 +169,6 @@ defmodule PulsarEx.ProducerManager do
       end)
     end
   end
+
+  defp name(cluster), do: String.to_atom("#{__MODULE__}.#{cluster}")
 end

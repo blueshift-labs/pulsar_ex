@@ -1,23 +1,24 @@
 defmodule PulsarEx.ProducerSupervisor do
   use Supervisor
 
-  alias PulsarEx.{ProducerRegistry, Producers, ProducerManager}
+  alias PulsarEx.ProducerManager
 
-  def start_link(_) do
-    Supervisor.start_link(__MODULE__, :init, name: __MODULE__)
+  def start_link(cluster_opts) do
+    cluster = Keyword.get(cluster_opts, :cluster, :default)
+    Supervisor.start_link(__MODULE__, cluster_opts, name: name(cluster))
   end
 
   @impl true
-  def init(:init) do
-    producer_opts = Application.get_env(:pulsar_ex, :producer_opts, [])
-    auto_start = Keyword.get(producer_opts, :auto_start, true)
+  def init(cluster_opts) do
+    cluster = Keyword.get(cluster_opts, :cluster, :default)
 
     children = [
-      {Registry, keys: :unique, name: ProducerRegistry, partitions: System.schedulers_online()},
-      {DynamicSupervisor, strategy: :one_for_one, name: Producers},
-      {ProducerManager, auto_start}
+      {DynamicSupervisor, strategy: :one_for_one, name: ProducerManager.producers(cluster)},
+      {ProducerManager, cluster_opts}
     ]
 
     Supervisor.init(children, strategy: :one_for_all)
   end
+
+  defp name(cluster), do: String.to_atom("#{__MODULE__}.#{cluster}")
 end

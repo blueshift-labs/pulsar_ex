@@ -2,6 +2,7 @@ defmodule PulsarEx.JobState do
   @type t :: %__MODULE__{}
 
   @enforce_keys [
+    :cluster,
     :worker,
     :topic,
     :subscription,
@@ -21,6 +22,7 @@ defmodule PulsarEx.JobState do
   ]
 
   defstruct [
+    :cluster,
     :worker,
     :topic,
     :subscription,
@@ -78,11 +80,13 @@ defmodule PulsarEx.Middlewares.Logging do
 
   @impl true
   def call(handler) do
-    fn %JobState{job: job} = job_state ->
+    fn %JobState{job: job, cluster: cluster} = job_state ->
       start = System.monotonic_time()
-      Logger.debug("start processing job #{job}")
+      Logger.debug("start processing job #{job}, on cluster #{cluster}")
 
-      Logger.debug("processing job #{job} with payload", payload: job_state.payload)
+      Logger.debug("processing job #{job} with payload, on cluster #{cluster}",
+        payload: job_state.payload
+      )
 
       job_state = handler.(job_state)
 
@@ -90,16 +94,18 @@ defmodule PulsarEx.Middlewares.Logging do
 
       case job_state.state do
         :ok ->
-          Logger.debug("finished processing job #{job} with duration #{duration}ms")
+          Logger.debug(
+            "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}"
+          )
 
         {:ok, result} ->
           Logger.debug(
-            "finished processing job #{job} with duration #{duration}ms, #{inspect(result)}"
+            "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}, #{inspect(result)}"
           )
 
         state ->
           Logger.error(
-            "error processing job #{job} with duration #{duration}ms, #{inspect(state)}",
+            "error processing job #{job} with duration #{duration}ms, on cluster #{cluster}, #{inspect(state)}",
             payload: job_state.payload
           )
       end
@@ -116,9 +122,9 @@ defmodule PulsarEx.Middlewares.Telemetry do
 
   @impl true
   def call(handler) do
-    fn %JobState{job: job, topic: topic, subscription: subscription} = job_state ->
+    fn %JobState{job: job, topic: topic, subscription: subscription, cluster: cluster} = job_state ->
       start = System.monotonic_time()
-      metadata = %{job: job, topic: topic, subscription: subscription}
+      metadata = %{job: job, topic: topic, subscription: subscription, cluster: cluster}
       job_state = handler.(job_state)
 
       case job_state do

@@ -19,6 +19,7 @@ defmodule PulsarEx.ProducerCallback do
   alias PulsarEx.Proto.{MessageIdData}
 
   @callback produce(
+              cluster :: atom(),
               topic_name :: String.t(),
               payload :: binary(),
               message_opts :: keyword(),
@@ -26,6 +27,7 @@ defmodule PulsarEx.ProducerCallback do
             ) :: {:ok, MessageIdData.t()} | {:error, term()}
 
   @callback async_produce(
+              cluster :: atom(),
               topic_name :: String.t(),
               payload :: binary(),
               message_opts :: keyword(),
