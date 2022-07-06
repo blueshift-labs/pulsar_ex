@@ -798,9 +798,10 @@ defmodule PulsarEx.Connection do
     {{pid, _} = from, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
 
     duration = System.monotonic_time() - ts
+    duration_ms = div(duration, 1_000_000)
 
     Logger.debug(
-      "Created producer #{request.producer_id} on broker #{state.broker_name} after #{duration}ms, on cluster #{state.cluster}"
+      "Created producer #{request.producer_id} on broker #{state.broker_name} after #{duration_ms}ms, on cluster #{state.cluster}"
     )
 
     requests = Map.delete(state.requests, {:request_id, response.request_id})
@@ -832,9 +833,10 @@ defmodule PulsarEx.Connection do
     {_, ts, request} = Map.get(state.requests, {:request_id, response.request_id})
 
     duration = System.monotonic_time() - ts
+    duration_ms = div(duration, 1_000_000)
 
     Logger.warn(
-      "Producer #{request.producer_id} not ready on broker #{state.broker_name}, after #{duration}ms, on cluster #{state.cluster}"
+      "Producer #{request.producer_id} not ready on broker #{state.broker_name}, after #{duration_ms}ms, on cluster #{state.cluster}"
     )
 
     state
@@ -847,9 +849,10 @@ defmodule PulsarEx.Connection do
     case request_info do
       {{pid, _} = from, ts, %CommandSubscribe{} = request} ->
         duration = System.monotonic_time() - ts
+        duration_ms = div(duration, 1_000_000)
 
         Logger.debug(
-          "Subscribed consumer #{request.consumer_id} on broker #{state.broker_name}, after #{duration}ms, on cluster #{state.cluster}"
+          "Subscribed consumer #{request.consumer_id} on broker #{state.broker_name}, after #{duration_ms}ms, on cluster #{state.cluster}"
         )
 
         reply = %{
@@ -877,18 +880,20 @@ defmodule PulsarEx.Connection do
 
       {nil, ts, %CommandCloseProducer{producer_id: producer_id}} ->
         duration = System.monotonic_time() - ts
+        duration_ms = div(duration, 1_000_000)
 
         Logger.debug(
-          "Stopped producer #{producer_id} from broker #{state.broker_name}, after #{duration}ms, on cluster #{state.cluster}"
+          "Stopped producer #{producer_id} from broker #{state.broker_name}, after #{duration_ms}ms, on cluster #{state.cluster}"
         )
 
         state
 
       {nil, ts, %CommandCloseConsumer{consumer_id: consumer_id}} ->
         duration = System.monotonic_time() - ts
+        duration_ms = div(duration, 1_000_000)
 
         Logger.debug(
-          "Stopped consumer #{consumer_id} from broker #{state.broker_name}, after #{duration}ms, on cluster #{state.cluster}"
+          "Stopped consumer #{consumer_id} from broker #{state.broker_name}, after #{duration_ms}ms, on cluster #{state.cluster}"
         )
 
         state
@@ -902,9 +907,10 @@ defmodule PulsarEx.Connection do
     case request_info do
       {from, ts, %CommandProducer{} = request} ->
         duration = System.monotonic_time() - ts
+        duration_ms = div(duration, 1_000_000)
 
         Logger.error(
-          "Error connecting producer #{request.producer_id} on broker #{state.broker_name}, after #{duration}ms, on cluster #{state.cluster}, #{inspect(err)}"
+          "Error connecting producer #{request.producer_id} on broker #{state.broker_name}, after #{duration_ms}ms, on cluster #{state.cluster}, #{inspect(err)}"
         )
 
         GenServer.reply(from, {:error, err})
@@ -919,9 +925,10 @@ defmodule PulsarEx.Connection do
 
       {from, ts, %CommandSubscribe{} = request} ->
         duration = System.monotonic_time() - ts
+        duration_ms = div(duration, 1_000_000)
 
         Logger.error(
-          "Error subscribing to topic #{request.topic} for consumer #{request.consumer_id} on broker #{state.broker_name}, after #{duration}ms, on cluster #{state.cluster}, #{inspect(err)}"
+          "Error subscribing to topic #{request.topic} for consumer #{request.consumer_id} on broker #{state.broker_name}, after #{duration_ms}ms, on cluster #{state.cluster}, #{inspect(err)}"
         )
 
         GenServer.reply(from, {:error, err})
@@ -936,18 +943,20 @@ defmodule PulsarEx.Connection do
 
       {nil, ts, %CommandCloseProducer{producer_id: producer_id}} ->
         duration = System.monotonic_time() - ts
+        duration_ms = div(duration, 1_000_000)
 
         Logger.error(
-          "Error stopping producer #{producer_id} from broker #{state.broker_name}, after #{duration}ms, on cluster #{state.cluster}, #{inspect(err)}"
+          "Error stopping producer #{producer_id} from broker #{state.broker_name}, after #{duration_ms}ms, on cluster #{state.cluster}, #{inspect(err)}"
         )
 
         state
 
       {nil, ts, %CommandCloseConsumer{consumer_id: consumer_id}} ->
         duration = System.monotonic_time() - ts
+        duration_ms = div(duration, 1_000_000)
 
         Logger.error(
-          "Error stopping consumer #{consumer_id} from broker #{state.broker_name}, after #{duration}ms, on cluster #{state.cluster}, #{inspect(err)}"
+          "Error stopping consumer #{consumer_id} from broker #{state.broker_name}, after #{duration_ms}ms, on cluster #{state.cluster}, #{inspect(err)}"
         )
 
         state
@@ -961,9 +970,10 @@ defmodule PulsarEx.Connection do
     state = %{state | requests: requests}
 
     duration = System.monotonic_time() - ts
+    duration_ms = div(duration, 1_000_000)
 
     Logger.debug(
-      "Received Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, after #{duration}ms, on cluster #{state.cluster}"
+      "Received Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, after #{duration_ms}ms, on cluster #{state.cluster}"
     )
 
     GenServer.cast(pid, {:send_response, {response.sequence_id, {:ok, response.message_id}}})
@@ -984,9 +994,10 @@ defmodule PulsarEx.Connection do
     state = %{state | requests: requests}
 
     duration = System.monotonic_time() - ts
+    duration_ms = div(duration, 1_000_000)
 
     Logger.error(
-      "Received Send Error from broker #{state.broker_name} for producer #{response.producer_id}, after #{duration}ms, on cluster #{state.cluster}, #{inspect(err)}"
+      "Received Send Error from broker #{state.broker_name} for producer #{response.producer_id}, after #{duration_ms}ms, on cluster #{state.cluster}, #{inspect(err)}"
     )
 
     GenServer.cast(pid, {:send_response, {response.sequence_id, {:error, err}}})
@@ -1009,9 +1020,10 @@ defmodule PulsarEx.Connection do
     state = %{state | requests: requests}
 
     duration = System.monotonic_time() - ts
+    duration_ms = div(duration, 1_000_000)
 
     Logger.debug(
-      "Received Ack Response from broker #{state.broker_name} for consumer #{request.consumer_id}, #{inspect(duration)}ms, on cluster #{state.cluster}, #{inspect(response)}"
+      "Received Ack Response from broker #{state.broker_name} for consumer #{request.consumer_id}, #{duration_ms}ms, on cluster #{state.cluster}, #{inspect(response)}"
     )
 
     message_ids =
@@ -1030,9 +1042,10 @@ defmodule PulsarEx.Connection do
     state = %{state | requests: requests}
 
     duration = System.monotonic_time() - ts
+    duration_ms = div(duration, 1_000_000)
 
     Logger.error(
-      "Received Ack Error from broker #{state.broker_name} for consumer #{request.consumer_id}, after #{duration}ms, on cluster #{state.cluster}, #{inspect(response)}"
+      "Received Ack Error from broker #{state.broker_name} for consumer #{request.consumer_id}, after #{duration_ms}ms, on cluster #{state.cluster}, #{inspect(response)}"
     )
 
     state
