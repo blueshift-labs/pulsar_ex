@@ -82,9 +82,9 @@ defmodule PulsarEx.Middlewares.Logging do
   def call(handler) do
     fn %JobState{job: job, cluster: cluster} = job_state ->
       start = System.monotonic_time(:millisecond)
-      Logger.debug("start processing job #{job}, on cluster #{cluster}")
+      Logger.info("start processing job #{job}, on cluster #{cluster}")
 
-      Logger.debug("processing job #{job} with payload, on cluster #{cluster}",
+      Logger.info("processing job #{job} with payload, on cluster #{cluster}",
         payload: job_state.payload
       )
 
@@ -94,12 +94,12 @@ defmodule PulsarEx.Middlewares.Logging do
 
       case job_state.state do
         :ok ->
-          Logger.debug(
+          Logger.info(
             "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}"
           )
 
         {:ok, result} ->
-          Logger.debug(
+          Logger.info(
             "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}, #{inspect(result)}"
           )
 
