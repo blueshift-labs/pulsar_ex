@@ -11,6 +11,7 @@ defmodule PulsarEx.WorkerCallback do
 
   @callback topic(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
   @callback partition_key(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
+  @callback ordering_key(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
   @callback handle_job(job :: atom(), job_state :: JobState.t()) ::
               :ok | {:ok, term()} | {:error, term()}
 end

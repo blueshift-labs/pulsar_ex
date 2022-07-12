@@ -141,6 +141,11 @@ defmodule PulsarEx.Worker do
 
       defoverridable partition_key: 3
 
+      @impl true
+      def ordering_key(_, _, message_opts), do: Keyword.get(message_opts, :ordering_key)
+
+      defoverridable ordering_key: 3
+
       def enqueue_job(job, params, message_opts \\ [])
 
       def enqueue_job(job, params, message_opts) do
@@ -161,15 +166,20 @@ defmodule PulsarEx.Worker do
             |> Enum.into(%{})
             |> Map.put("job", job)
 
+          message_opts =
+            Keyword.merge(message_opts,
+              properties: properties,
+              partition_key: partition_key(job, params, message_opts),
+              ordering_key: ordering_key(job, params, message_opts)
+            )
+            |> Enum.reject(&match?({_, nil}, &1))
+
           reply =
             PulsarEx.Clusters.produce(
               @cluster,
               topic,
               Jason.encode!(params),
-              Keyword.merge(message_opts,
-                properties: properties,
-                partition_key: partition_key(job, params, message_opts)
-              ),
+              message_opts,
               @producer_opts
             )
 
@@ -215,7 +225,7 @@ defmodule PulsarEx.Worker do
             event_time: nil,
             producer_name: "inline",
             partition_key: partition_key(job, params, message_opts),
-            ordering_key: nil,
+            ordering_key: ordering_key(job, params, message_opts),
             deliver_at_time: nil,
             redelivery_count: 0,
             consumer_opts: nil,
