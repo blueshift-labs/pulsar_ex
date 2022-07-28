@@ -9,6 +9,8 @@ end
 defmodule PulsarEx.WorkerCallback do
   alias PulsarEx.JobState
 
+  @callback cluster(job :: atom(), params :: any(), message_opts :: keyword()) ::
+              keyword() | String.t()
   @callback topic(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
   @callback partition_key(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
   @callback ordering_key(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()

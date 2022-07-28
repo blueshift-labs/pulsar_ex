@@ -88,7 +88,7 @@ defmodule PulsarEx.Worker do
 
         handler = fn ->
           job_handler().(%JobState{
-            cluster: @cluster,
+            cluster: state.cluster,
             worker: __MODULE__,
             topic: state.topic_name,
             subscription: state.subscription,
@@ -111,7 +111,7 @@ defmodule PulsarEx.Worker do
         job_state =
           if @use_executor do
             :poolboy.transaction(
-              PulsarEx.Executor.name(@cluster),
+              PulsarEx.Executor.name(state.cluster),
               &PulsarEx.Executor.exec(&1, handler, @exec_timeout)
             )
           else
@@ -127,6 +127,11 @@ defmodule PulsarEx.Worker do
       end
 
       defoverridable handle_job: 2
+
+      @impl true
+      def cluster(_, _, _), do: nil
+
+      defoverridable cluster: 3
 
       defp assert_topic(nil), do: raise("topic undefined")
       defp assert_topic(topic), do: topic
@@ -152,12 +157,23 @@ defmodule PulsarEx.Worker do
         {topic, message_opts} =
           Keyword.pop_lazy(message_opts, :topic, fn -> topic(job, params, message_opts) end)
 
-        enqueue_job(job, params, topic, message_opts)
+        {cluster, message_opts} =
+          Keyword.pop_lazy(message_opts, :cluster, fn ->
+            cluster(job, params, message_opts) || cluster()
+          end)
+
+        enqueue_job(job, params, topic, cluster, message_opts)
       end
 
-      def enqueue_job(job, params, topic, message_opts) when job in @jobs do
+      def enqueue_job(job, params, topic, message_opts) do
+        enqueue_job(job, params, topic, :default, message_opts)
+      end
+
+      def enqueue_job(job, params, topic, cluster, message_opts) when job in @jobs do
+        cluster = if is_atom(cluster), do: cluster, else: String.to_atom(cluster)
+
         if @inline do
-          inline_process(job, params, topic, message_opts)
+          inline_process(job, params, topic, cluster, message_opts)
         else
           start = System.monotonic_time()
 
@@ -176,7 +192,7 @@ defmodule PulsarEx.Worker do
 
           reply =
             PulsarEx.Clusters.produce(
-              @cluster,
+              cluster,
               topic,
               Jason.encode!(params),
               message_opts,
@@ -188,14 +204,14 @@ defmodule PulsarEx.Worker do
               :telemetry.execute(
                 [:pulsar_ex, :worker, :enqueue, :success],
                 %{count: 1, duration: System.monotonic_time() - start},
-                %{cluster: @cluster, topic: topic, job: job}
+                %{cluster: cluster, topic: topic, job: job}
               )
 
             {:error, _} ->
               :telemetry.execute(
                 [:pulsar_ex, :worker, :enqueue, :error],
                 %{count: 1},
-                %{cluster: @cluster, topic: topic, job: job}
+                %{cluster: cluster, topic: topic, job: job}
               )
           end
 
@@ -203,7 +219,7 @@ defmodule PulsarEx.Worker do
         end
       end
 
-      def inline_process(job, params, topic, message_opts) do
+      defp inline_process(job, params, topic, cluster, message_opts) do
         params = Jason.decode!(Jason.encode!(params))
 
         properties =
@@ -214,7 +230,7 @@ defmodule PulsarEx.Worker do
 
         job_state =
           job_handler().(%JobState{
-            cluster: @cluster,
+            cluster: cluster,
             worker: __MODULE__,
             topic: topic,
             subscription: @subscription && "#{@subscription}",
@@ -249,11 +265,11 @@ defmodule PulsarEx.Worker do
             Keyword.merge(@opts, opts)
           end
 
-        {subscription, opts} = Keyword.pop(opts, :subscription)
+        {cluster, opts} = Keyword.pop(opts, :cluster, cluster())
+        {subscription, opts} = Keyword.pop_lazy(opts, :subscription, &subscription/0)
         {topic, opts} = Keyword.pop(opts, :topic)
         {regex, opts} = Keyword.pop(opts, :regex)
 
-        subscription = subscription || subscription()
         subscription = "#{subscription}"
 
         case {topic, regex} do
@@ -265,7 +281,7 @@ defmodule PulsarEx.Worker do
             {namespace, opts} = Keyword.pop!(opts, :namespace)
 
             PulsarEx.Clusters.start_consumer(
-              @cluster,
+              cluster,
               tenant,
               namespace,
               regex,
@@ -275,18 +291,18 @@ defmodule PulsarEx.Worker do
             )
 
           {_, nil} ->
-            PulsarEx.Clusters.start_consumer(@cluster, topic, subscription, __MODULE__, opts)
+            PulsarEx.Clusters.start_consumer(cluster, topic, subscription, __MODULE__, opts)
         end
       end
 
       def stop(opts \\ []) do
         opts = Keyword.merge(@opts, opts)
 
-        {subscription, opts} = Keyword.pop(opts, :subscription)
+        {cluster, opts} = Keyword.pop(opts, :cluster, cluster())
+        {subscription, opts} = Keyword.pop_lazy(opts, :subscription, &subscription/0)
         {topic, opts} = Keyword.pop(opts, :topic)
         {regex, opts} = Keyword.pop(opts, :regex)
 
-        subscription = subscription || subscription()
         subscription = "#{subscription}"
 
         case {topic, regex} do
@@ -297,10 +313,10 @@ defmodule PulsarEx.Worker do
             {tenant, opts} = Keyword.pop!(opts, :tenant)
             {namespace, opts} = Keyword.pop!(opts, :namespace)
 
-            PulsarEx.Clusters.stop_consumer(@cluster, tenant, namespace, regex, subscription)
+            PulsarEx.Clusters.stop_consumer(cluster, tenant, namespace, regex, subscription)
 
           {_, nil} ->
-            PulsarEx.Clusters.stop_consumer(@cluster, topic, subscription)
+            PulsarEx.Clusters.stop_consumer(cluster, topic, subscription)
         end
       end
     end
