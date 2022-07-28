@@ -228,12 +228,14 @@ defmodule PulsarEx.Worker do
           |> Enum.map(fn {k, v} -> {"#{k}", "#{v}"} end)
           |> Enum.into(%{})
 
+        subscription = if @subscription, do: "#{@subscription}", else: nil
+
         job_state =
           job_handler().(%JobState{
             cluster: cluster,
             worker: __MODULE__,
             topic: topic,
-            subscription: @subscription && "#{@subscription}",
+            subscription: subscription,
             job: job,
             payload: params,
             properties: properties,
