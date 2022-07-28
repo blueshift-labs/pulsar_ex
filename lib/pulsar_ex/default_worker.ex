@@ -1,8 +1,6 @@
 defmodule PulsarEx.DefaultWorker do
   use PulsarEx.Worker,
     otp_app: :utx,
-    topic: "persistent://public/default/test.json",
-    subscription: "test",
     subscription_type: :key_shared,
     use_executor: true,
     exec_timeout: 1000,

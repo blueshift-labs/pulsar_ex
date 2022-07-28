@@ -3,7 +3,6 @@ defmodule PulsarEx.Worker do
     {otp_app, opts} = Keyword.pop!(opts, :otp_app)
     opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
     {cluster, opts} = Keyword.pop(opts, :cluster, :default)
-    {subscription, opts} = Keyword.pop!(opts, :subscription)
     {jobs, opts} = Keyword.pop!(opts, :jobs)
     {use_executor, opts} = Keyword.pop(opts, :use_executor, false)
     {exec_timeout, opts} = Keyword.pop(opts, :exec_timeout, 5_000)
@@ -11,14 +10,13 @@ defmodule PulsarEx.Worker do
     {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
     {producer_opts, opts} = Keyword.pop(opts, :producer_opts, [])
 
-    {otp_app, cluster, subscription, jobs, use_executor, exec_timeout, inline, middlewares,
-     producer_opts, opts}
+    {otp_app, cluster, jobs, use_executor, exec_timeout, inline, middlewares, producer_opts, opts}
   end
 
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
-      {otp_app, cluster, subscription, jobs, use_executor, exec_timeout, inline, middlewares,
-       producer_opts, opts} = PulsarEx.Worker.compile_config(__MODULE__, opts)
+      {otp_app, cluster, jobs, use_executor, exec_timeout, inline, middlewares, producer_opts,
+       opts} = PulsarEx.Worker.compile_config(__MODULE__, opts)
 
       require Logger
 
@@ -43,7 +41,7 @@ defmodule PulsarEx.Worker do
       @otp_app otp_app
       @cluster cluster
       @topic Keyword.get(opts, :topic)
-      @subscription subscription
+      @subscription Keyword.get(opts, :subscription)
       @jobs jobs
       @use_executor use_executor
       @exec_timeout exec_timeout
@@ -57,14 +55,16 @@ defmodule PulsarEx.Worker do
         @cluster
       end
 
-      def subscription() do
-        @subscription
-      end
-
       if @topic do
         def topic(), do: @topic
       else
         def topic(), do: raise("Topic is not defined for #{__MODULE__}")
+      end
+
+      if @subscription do
+        def subscription(), do: "#{@subscription}"
+      else
+        def subscription(), do: raise("Subscription is not defined for #{__MODULE__}")
       end
 
       def producer_opts(), do: @producer_opts
@@ -91,7 +91,7 @@ defmodule PulsarEx.Worker do
             cluster: @cluster,
             worker: __MODULE__,
             topic: state.topic_name,
-            subscription: @subscription,
+            subscription: state.subscription,
             job: String.to_atom(job),
             payload: payload,
             properties: properties,
@@ -217,7 +217,7 @@ defmodule PulsarEx.Worker do
             cluster: @cluster,
             worker: __MODULE__,
             topic: topic,
-            subscription: @subscription,
+            subscription: @subscription && "#{@subscription}",
             job: job,
             payload: params,
             properties: properties,
@@ -249,8 +249,12 @@ defmodule PulsarEx.Worker do
             Keyword.merge(@opts, opts)
           end
 
+        {subscription, opts} = Keyword.pop(opts, :subscription)
         {topic, opts} = Keyword.pop(opts, :topic)
         {regex, opts} = Keyword.pop(opts, :regex)
+
+        subscription = subscription || subscription()
+        subscription = "#{subscription}"
 
         case {topic, regex} do
           {nil, nil} ->
@@ -265,21 +269,25 @@ defmodule PulsarEx.Worker do
               tenant,
               namespace,
               regex,
-              @subscription,
+              subscription,
               __MODULE__,
               opts
             )
 
           {_, nil} ->
-            PulsarEx.Clusters.start_consumer(@cluster, topic, @subscription, __MODULE__, opts)
+            PulsarEx.Clusters.start_consumer(@cluster, topic, subscription, __MODULE__, opts)
         end
       end
 
       def stop(opts \\ []) do
         opts = Keyword.merge(@opts, opts)
 
+        {subscription, opts} = Keyword.pop(opts, :subscription)
         {topic, opts} = Keyword.pop(opts, :topic)
         {regex, opts} = Keyword.pop(opts, :regex)
+
+        subscription = subscription || subscription()
+        subscription = "#{subscription}"
 
         case {topic, regex} do
           {nil, nil} ->
@@ -289,10 +297,10 @@ defmodule PulsarEx.Worker do
             {tenant, opts} = Keyword.pop!(opts, :tenant)
             {namespace, opts} = Keyword.pop!(opts, :namespace)
 
-            PulsarEx.Clusters.stop_consumer(@cluster, tenant, namespace, regex, @subscription)
+            PulsarEx.Clusters.stop_consumer(@cluster, tenant, namespace, regex, subscription)
 
           {_, nil} ->
-            PulsarEx.Clusters.stop_consumer(@cluster, topic, @subscription)
+            PulsarEx.Clusters.stop_consumer(@cluster, topic, subscription)
         end
       end
     end
