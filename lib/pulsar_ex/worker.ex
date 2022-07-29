@@ -55,6 +55,10 @@ defmodule PulsarEx.Worker do
         @cluster
       end
 
+      def jobs() do
+        @jobs
+      end
+
       if @topic do
         def topic(), do: @topic
       else
