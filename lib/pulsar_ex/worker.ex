@@ -92,13 +92,8 @@ defmodule PulsarEx.Worker do
       @impl true
       def handle_messages([%ConsumerMessage{properties: properties} = message], state) do
         {job, properties} = Map.pop(properties, "job")
-
-        job =
-          if job in @jobs do
-            String.to_atom(job)
-          else
-            nil
-          end
+        job = if job, do: String.to_atom(job), else: nil
+        job = if job in @jobs, do: job, else: nil
 
         payload = Jason.decode!(message.payload)
 
