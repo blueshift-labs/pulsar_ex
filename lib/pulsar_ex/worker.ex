@@ -90,8 +90,10 @@ defmodule PulsarEx.Worker do
         {job, properties} = Map.pop(properties, "job")
 
         job =
-          if job do
+          if job in @jobs do
             String.to_atom(job)
+          else
+            nil
           end
 
         payload = Jason.decode!(message.payload)
