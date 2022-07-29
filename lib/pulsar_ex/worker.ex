@@ -3,7 +3,7 @@ defmodule PulsarEx.Worker do
     {otp_app, opts} = Keyword.pop!(opts, :otp_app)
     opts = Application.get_env(otp_app, module, []) |> Keyword.merge(opts)
     {cluster, opts} = Keyword.pop(opts, :cluster, :default)
-    {jobs, opts} = Keyword.pop!(opts, :jobs)
+    {jobs, opts} = Keyword.pop(opts, :jobs, [])
     {use_executor, opts} = Keyword.pop(opts, :use_executor, false)
     {exec_timeout, opts} = Keyword.pop(opts, :exec_timeout, 5_000)
     {inline, opts} = Keyword.pop(opts, :inline, false)
@@ -70,8 +70,12 @@ defmodule PulsarEx.Worker do
       def producer_opts(), do: @producer_opts
 
       defp job_handler() do
-        handler = fn %JobState{job: job} = job_state ->
-          %JobState{job_state | state: handle_job(job, job_state)}
+        handler = fn
+          %JobState{job: nil} = job_state ->
+            %JobState{job_state | state: handle_job(job_state)}
+
+          %JobState{job: job} = job_state ->
+            %JobState{job_state | state: handle_job(job, job_state)}
         end
 
         @middlewares
@@ -83,7 +87,13 @@ defmodule PulsarEx.Worker do
 
       @impl true
       def handle_messages([%ConsumerMessage{properties: properties} = message], state) do
-        {job, properties} = Map.pop!(properties, "job")
+        {job, properties} = Map.pop(properties, "job")
+
+        job =
+          if job do
+            String.to_atom(job)
+          end
+
         payload = Jason.decode!(message.payload)
 
         handler = fn ->
@@ -92,7 +102,7 @@ defmodule PulsarEx.Worker do
             worker: __MODULE__,
             topic: state.topic_name,
             subscription: state.subscription,
-            job: String.to_atom(job),
+            job: job,
             payload: payload,
             properties: properties,
             publish_time: message.publish_time,
@@ -122,11 +132,23 @@ defmodule PulsarEx.Worker do
       end
 
       @impl true
+      def handle_job(_) do
+        :ok
+      end
+
+      defoverridable handle_job: 1
+
+      @impl true
       def handle_job(_, _) do
         :ok
       end
 
       defoverridable handle_job: 2
+
+      @impl true
+      def cluster(_, _), do: nil
+
+      defoverridable cluster: 2
 
       @impl true
       def cluster(_, _, _), do: nil
@@ -137,9 +159,19 @@ defmodule PulsarEx.Worker do
       defp assert_topic(topic), do: topic
 
       @impl true
+      def topic(_, _), do: assert_topic(@topic)
+
+      defoverridable topic: 2
+
+      @impl true
       def topic(_, _, _), do: assert_topic(@topic)
 
       defoverridable topic: 3
+
+      @impl true
+      def partition_key(_, message_opts), do: Keyword.get(message_opts, :partition_key)
+
+      defoverridable partition_key: 2
 
       @impl true
       def partition_key(_, _, message_opts), do: Keyword.get(message_opts, :partition_key)
@@ -147,46 +179,117 @@ defmodule PulsarEx.Worker do
       defoverridable partition_key: 3
 
       @impl true
+      def ordering_key(_, message_opts), do: Keyword.get(message_opts, :ordering_key)
+
+      defoverridable ordering_key: 2
+
+      @impl true
       def ordering_key(_, _, message_opts), do: Keyword.get(message_opts, :ordering_key)
 
       defoverridable ordering_key: 3
 
-      def enqueue_job(job, params, message_opts \\ [])
+      if @jobs == [] do
+        def enqueue(params, message_opts \\ [])
 
-      def enqueue_job(job, params, message_opts) do
-        {topic, message_opts} =
-          Keyword.pop_lazy(message_opts, :topic, fn -> topic(job, params, message_opts) end)
+        def enqueue(params, message_opts) do
+          {topic, message_opts} =
+            Keyword.pop_lazy(message_opts, :topic, fn -> topic(params, message_opts) end)
 
-        {cluster, message_opts} =
-          Keyword.pop_lazy(message_opts, :cluster, fn ->
-            cluster(job, params, message_opts) || cluster()
-          end)
+          {cluster, message_opts} =
+            Keyword.pop_lazy(message_opts, :cluster, fn ->
+              cluster(params, message_opts) || cluster()
+            end)
 
-        enqueue_job(job, params, topic, cluster, message_opts)
+          {partition_key, message_opts} =
+            Keyword.pop_lazy(message_opts, :partition_key, fn ->
+              partition_key(params, message_opts)
+            end)
+
+          {ordering_key, message_opts} =
+            Keyword.pop_lazy(message_opts, :ordering_key, fn ->
+              ordering_key(params, message_opts)
+            end)
+
+          do_enqueue_job(nil, params, topic, cluster, partition_key, ordering_key, message_opts)
+        end
+
+        def enqueue(params, topic, message_opts) do
+          message_opts = Keyword.merge(message_opts, topic: topic, cluster: :default)
+          enqueue(params, message_opts)
+        end
+
+        def enqueue(params, topic, cluster, message_opts) do
+          message_opts = Keyword.merge(message_opts, topic: topic, cluster: cluster)
+          enqueue(params, message_opts)
+        end
+      else
+        def enqueue_job(job, params, message_opts \\ [])
+
+        def enqueue_job(job, params, message_opts) when job in @jobs do
+          {topic, message_opts} =
+            Keyword.pop_lazy(message_opts, :topic, fn -> topic(job, params, message_opts) end)
+
+          {cluster, message_opts} =
+            Keyword.pop_lazy(message_opts, :cluster, fn ->
+              cluster(job, params, message_opts) || cluster()
+            end)
+
+          {partition_key, message_opts} =
+            Keyword.pop_lazy(message_opts, :partition_key, fn ->
+              partition_key(job, params, message_opts)
+            end)
+
+          {ordering_key, message_opts} =
+            Keyword.pop_lazy(message_opts, :ordering_key, fn ->
+              ordering_key(job, params, message_opts)
+            end)
+
+          do_enqueue_job(job, params, topic, cluster, partition_key, ordering_key, message_opts)
+        end
+
+        def enqueue_job(job, params, topic, message_opts) do
+          message_opts = Keyword.merge(message_opts, topic: topic, cluster: :default)
+          enqueue_job(job, params, message_opts)
+        end
+
+        def enqueue_job(job, params, topic, cluster, message_opts) do
+          message_opts = Keyword.merge(message_opts, topic: topic, cluster: cluster)
+          enqueue_job(job, params, message_opts)
+        end
       end
 
-      def enqueue_job(job, params, topic, message_opts) do
-        enqueue_job(job, params, topic, :default, message_opts)
-      end
-
-      def enqueue_job(job, params, topic, cluster, message_opts) when job in @jobs do
+      # job, partition_key, ordering_key can be nil
+      defp do_enqueue_job(job, params, topic, cluster, partition_key, ordering_key, message_opts) do
         cluster = if is_atom(cluster), do: cluster, else: String.to_atom(cluster)
 
+        metadata =
+          if job do
+            %{cluster: cluster, topic: topic, job: job}
+          else
+            %{cluster: cluster, topic: topic}
+          end
+
         if @inline do
-          inline_process(job, params, topic, cluster, message_opts)
+          inline_process(job, params, topic, cluster, partition_key, ordering_key, message_opts)
         else
           start = System.monotonic_time()
 
           properties =
             Keyword.get(message_opts, :properties, [])
             |> Enum.into(%{})
-            |> Map.put("job", job)
+
+          properties =
+            if job do
+              Map.put(properties, "job", job)
+            else
+              properties
+            end
 
           message_opts =
             Keyword.merge(message_opts,
               properties: properties,
-              partition_key: partition_key(job, params, message_opts),
-              ordering_key: ordering_key(job, params, message_opts)
+              partition_key: partition_key,
+              ordering_key: ordering_key
             )
             |> Enum.reject(&match?({_, nil}, &1))
 
@@ -204,14 +307,14 @@ defmodule PulsarEx.Worker do
               :telemetry.execute(
                 [:pulsar_ex, :worker, :enqueue, :success],
                 %{count: 1, duration: System.monotonic_time() - start},
-                %{cluster: cluster, topic: topic, job: job}
+                metadata
               )
 
             {:error, _} ->
               :telemetry.execute(
                 [:pulsar_ex, :worker, :enqueue, :error],
                 %{count: 1},
-                %{cluster: cluster, topic: topic, job: job}
+                metadata
               )
           end
 
@@ -219,7 +322,7 @@ defmodule PulsarEx.Worker do
         end
       end
 
-      defp inline_process(job, params, topic, cluster, message_opts) do
+      defp inline_process(job, params, topic, cluster, partition_key, ordering_key, message_opts) do
         params = Jason.decode!(Jason.encode!(params))
 
         properties =
@@ -242,8 +345,8 @@ defmodule PulsarEx.Worker do
             publish_time: Timex.now(),
             event_time: nil,
             producer_name: "inline",
-            partition_key: partition_key(job, params, message_opts),
-            ordering_key: ordering_key(job, params, message_opts),
+            partition_key: partition_key,
+            ordering_key: ordering_key,
             deliver_at_time: nil,
             redelivery_count: 0,
             consumer_opts: nil,

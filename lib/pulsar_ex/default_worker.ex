@@ -4,11 +4,10 @@ defmodule PulsarEx.DefaultWorker do
     subscription_type: :key_shared,
     use_executor: true,
     exec_timeout: 1000,
-    inline: false,
-    jobs: [:test]
+    inline: false
 
   @impl true
-  def handle_job(:test, job_state) do
+  def handle_job(job_state) do
     IO.inspect(job_state)
 
     {:ok, "YES"}

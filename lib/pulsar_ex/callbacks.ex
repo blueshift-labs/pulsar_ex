@@ -9,11 +9,21 @@ end
 defmodule PulsarEx.WorkerCallback do
   alias PulsarEx.JobState
 
+  @callback cluster(params :: any(), message_opts :: keyword()) ::
+              keyword() | String.t()
   @callback cluster(job :: atom(), params :: any(), message_opts :: keyword()) ::
               keyword() | String.t()
+
+  @callback topic(params :: any(), message_opts :: keyword()) :: String.t()
   @callback topic(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
+
+  @callback partition_key(params :: any(), message_opts :: keyword()) :: String.t()
   @callback partition_key(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
+
+  @callback ordering_key(params :: any(), message_opts :: keyword()) :: String.t()
   @callback ordering_key(job :: atom(), params :: any(), message_opts :: keyword()) :: String.t()
+
+  @callback handle_job(job_state :: JobState.t()) :: :ok | {:ok, term()} | {:error, term()}
   @callback handle_job(job :: atom(), job_state :: JobState.t()) ::
               :ok | {:ok, term()} | {:error, term()}
 end

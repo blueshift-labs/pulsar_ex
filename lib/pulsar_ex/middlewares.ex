@@ -80,37 +80,70 @@ defmodule PulsarEx.Middlewares.Logging do
 
   @impl true
   def call(handler) do
-    fn %JobState{job: job, cluster: cluster} = job_state ->
-      start = System.monotonic_time(:millisecond)
-      Logger.info("start processing job #{job}, on cluster #{cluster}")
+    fn
+      %JobState{job: nil, cluster: cluster} = job_state ->
+        start = System.monotonic_time(:millisecond)
+        Logger.info("start processing job, on cluster #{cluster}")
 
-      Logger.info("processing job #{job} with payload, on cluster #{cluster}",
-        payload: job_state.payload
-      )
+        Logger.info("processing job with payload, on cluster #{cluster}",
+          payload: job_state.payload
+        )
 
-      job_state = handler.(job_state)
+        job_state = handler.(job_state)
 
-      duration = System.monotonic_time(:millisecond) - start
+        duration = System.monotonic_time(:millisecond) - start
 
-      case job_state.state do
-        :ok ->
-          Logger.info(
-            "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}"
-          )
+        case job_state.state do
+          :ok ->
+            Logger.info(
+              "finished processing job with duration #{duration}ms, on cluster #{cluster}"
+            )
 
-        {:ok, result} ->
-          Logger.info(
-            "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}, #{inspect(result)}"
-          )
+          {:ok, result} ->
+            Logger.info(
+              "finished processing job with duration #{duration}ms, on cluster #{cluster}, #{inspect(result)}"
+            )
 
-        state ->
-          Logger.error(
-            "error processing job #{job} with duration #{duration}ms, on cluster #{cluster}, #{inspect(state)}",
-            payload: job_state.payload
-          )
-      end
+          state ->
+            Logger.error(
+              "error processing job with duration #{duration}ms, on cluster #{cluster}, #{inspect(state)}",
+              payload: job_state.payload
+            )
+        end
 
-      job_state
+        job_state
+
+      %JobState{job: job, cluster: cluster} = job_state ->
+        start = System.monotonic_time(:millisecond)
+        Logger.info("start processing job #{job}, on cluster #{cluster}")
+
+        Logger.info("processing job #{job} with payload, on cluster #{cluster}",
+          payload: job_state.payload
+        )
+
+        job_state = handler.(job_state)
+
+        duration = System.monotonic_time(:millisecond) - start
+
+        case job_state.state do
+          :ok ->
+            Logger.info(
+              "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}"
+            )
+
+          {:ok, result} ->
+            Logger.info(
+              "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}, #{inspect(result)}"
+            )
+
+          state ->
+            Logger.error(
+              "error processing job #{job} with duration #{duration}ms, on cluster #{cluster}, #{inspect(state)}",
+              payload: job_state.payload
+            )
+        end
+
+        job_state
     end
   end
 end
@@ -124,7 +157,14 @@ defmodule PulsarEx.Middlewares.Telemetry do
   def call(handler) do
     fn %JobState{job: job, topic: topic, subscription: subscription, cluster: cluster} = job_state ->
       start = System.monotonic_time()
-      metadata = %{job: job, topic: topic, subscription: subscription, cluster: cluster}
+
+      metadata =
+        if job do
+          %{job: job, topic: topic, subscription: subscription, cluster: cluster}
+        else
+          %{topic: topic, subscription: subscription, cluster: cluster}
+        end
+
       job_state = handler.(job_state)
 
       case job_state do
