@@ -278,6 +278,15 @@ defmodule PulsarEx.Consumer do
       end
 
       @impl true
+      def handle_info(:connect, %{state: :connected} = state) do
+        Logger.warn(
+          "Attempt to double-subscribe consumer for topic #{state.topic_name} with subscription #{state.subscription}, on cluster #{state.cluster}"
+        )
+
+        {:noreply, state}
+      end
+
+      @impl true
       def handle_info(:connect, %{state: :connecting} = state) do
         if state.connection_ref != nil do
           Process.demonitor(state.connection_ref)
@@ -314,7 +323,7 @@ defmodule PulsarEx.Consumer do
 
           state = %{
             state
-            | state: :ready,
+            | state: :connected,
               broker: broker,
               priority_level: priority_level,
               read_compacted: read_compacted,
