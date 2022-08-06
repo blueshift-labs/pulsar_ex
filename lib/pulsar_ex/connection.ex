@@ -964,27 +964,44 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(%CommandSendReceipt{} = response, _, state) do
-    {{{pid, _}, ts, _}, requests} =
-      Map.pop(state.requests, {:sequence_id, response.producer_id, response.sequence_id})
+    state.requests
+    |> Map.pop({:sequence_id, response.producer_id, response.sequence_id})
+    |> case do
+      {{{pid, _}, ts, _}, requests} ->
+        state = %{state | requests: requests}
 
-    state = %{state | requests: requests}
+        duration = System.monotonic_time() - ts
+        duration_ms = div(duration, 1_000_000)
 
-    duration = System.monotonic_time() - ts
-    duration_ms = div(duration, 1_000_000)
+        Logger.debug(
+          "Received Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, after #{duration_ms}ms, on cluster #{state.cluster}"
+        )
 
-    Logger.debug(
-      "Received Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, after #{duration_ms}ms, on cluster #{state.cluster}"
-    )
+        GenServer.cast(pid, {:send_response, {response.sequence_id, {:ok, response.message_id}}})
 
-    GenServer.cast(pid, {:send_response, {response.sequence_id, {:ok, response.message_id}}})
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :send, :success],
+          %{count: 1, duration: duration},
+          state.metadata
+        )
 
-    :telemetry.execute(
-      [:pulsar_ex, :connection, :send, :success],
-      %{count: 1, duration: duration},
-      state.metadata
-    )
+        state
 
-    state
+      {_, requests} ->
+        state = %{state | requests: requests}
+
+        Logger.warn(
+          "Received missing Send Receipt from broker #{state.broker_name} for producer #{response.producer_id}, on cluster #{state.cluster}"
+        )
+
+        :telemetry.execute(
+          [:pulsar_ex, :connection, :send_receipts, :missing],
+          %{count: 1},
+          state.metadata
+        )
+
+        state
+    end
   end
 
   defp handle_command(%CommandSendError{error: err} = response, _, state) do
