@@ -142,6 +142,15 @@ defmodule PulsarEx.PartitionedProducer do
   end
 
   @impl true
+  def handle_info(:connect, %{state: :connected} = state) do
+    Logger.warn(
+      "Attempt to double-connect producer #{state.producer_id} for topic #{state.topic_name} to broker #{state.broker_name}, on cluster #{state.cluster}"
+    )
+
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(:connect, %{state: :connecting} = state) do
     if state.connection_ref != nil do
       Process.demonitor(state.connection_ref)
