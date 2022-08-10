@@ -33,27 +33,15 @@ defmodule PulsarEx.ConsumerManager do
         cluster,
         tenant,
         namespace,
-        %Regex{} = regex,
+        topic,
         subscription,
         module,
         consumer_opts
       ) do
     GenServer.call(
       name(cluster),
-      {:start, tenant, namespace, regex, subscription, module, consumer_opts},
+      {:start, tenant, namespace, topic, subscription, module, consumer_opts},
       @connection_timeout
-    )
-  end
-
-  def start_consumer(cluster, tenant, namespace, regex, subscription, module, consumer_opts) do
-    start_consumer(
-      cluster,
-      tenant,
-      namespace,
-      Regex.compile!(regex),
-      subscription,
-      module,
-      consumer_opts
     )
   end
 
@@ -73,8 +61,8 @@ defmodule PulsarEx.ConsumerManager do
     )
   end
 
-  def stop_consumer(cluster, tenant, namespace, regex, subscription) do
-    GenServer.call(name(cluster), {:stop, tenant, namespace, regex, subscription})
+  def stop_consumer(cluster, tenant, namespace, topic, subscription) do
+    GenServer.call(name(cluster), {:stop, tenant, namespace, topic, subscription})
   end
 
   def stop_consumer(cluster, topic_name, subscription) do
@@ -130,7 +118,7 @@ defmodule PulsarEx.ConsumerManager do
         subscription = Keyword.fetch!(consumer_opts, :subscription)
         module = Keyword.fetch!(consumer_opts, :module)
 
-        case Keyword.get(consumer_opts, :regex) do
+        case Keyword.get(consumer_opts, :tenant) do
           nil ->
             topic_name = Keyword.fetch!(consumer_opts, :topic)
             partitions = Keyword.get(consumer_opts, :partitions, nil)
@@ -141,14 +129,13 @@ defmodule PulsarEx.ConsumerManager do
               []
             )
 
-          regex ->
-            tenant = Keyword.fetch!(consumer_opts, :tenant)
+          tenant ->
             namespace = Keyword.fetch!(consumer_opts, :namespace)
-            regex = Regex.compile!(regex)
+            topic = Keyword.fetch!(consumer_opts, :topic)
 
             Process.send(
               self(),
-              {:start, tenant, namespace, regex, subscription, module, consumer_opts},
+              {:start, tenant, namespace, topic, subscription, module, consumer_opts},
               []
             )
         end
@@ -167,13 +154,13 @@ defmodule PulsarEx.ConsumerManager do
 
   @impl true
   def handle_call(
-        {:start, tenant, namespace, regex, subscription, module, consumer_opts},
+        {:start, tenant, namespace, topic, subscription, module, consumer_opts},
         _from,
         state
       ) do
     consumer_opts = consumer_opts(consumer_opts, state.cluster_opts)
 
-    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, regex) do
+    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, topic) do
       {:ok, topic_names} ->
         auto_refresh = Keyword.get(consumer_opts, :auto_refresh, true)
         refresh_interval = Keyword.get(consumer_opts, :refresh_interval, @refresh_interval)
@@ -184,14 +171,14 @@ defmodule PulsarEx.ConsumerManager do
               ref =
                 Process.send_after(
                   self(),
-                  {:refresh, tenant, namespace, regex, subscription, module, consumer_opts},
+                  {:refresh, tenant, namespace, topic, subscription, module, consumer_opts},
                   refresh_interval + :rand.uniform(refresh_interval)
                 )
 
               {:reply, :ok,
                %State{
                  state
-                 | refs: Map.put(state.refs, {tenant, namespace, regex, subscription}, ref)
+                 | refs: Map.put(state.refs, {tenant, namespace, topic, subscription}, ref)
                }}
             else
               {:reply, :ok, state}
@@ -203,7 +190,7 @@ defmodule PulsarEx.ConsumerManager do
 
       {:error, err} ->
         Logger.error(
-          "Error discovering topics for #{tenant}/#{namespace}, on cluster #{state.cluster}, #{inspect(err)}"
+          "Error discovering topics for tenant: #{inspect(tenant)}, namespace: #{inspect(namespace)}, topic: #{inspect(topic)}, on cluster #{state.cluster}, #{inspect(err)}"
         )
 
         {:reply, {:error, err}, state}
@@ -275,11 +262,11 @@ defmodule PulsarEx.ConsumerManager do
 
   @impl true
   def handle_call(
-        {:stop, tenant, namespace, regex, subscription},
+        {:stop, tenant, namespace, topic, subscription},
         _from,
-        %{cluster: cluster} = state
+        state
       ) do
-    {ref, refs} = Map.pop(state.refs, {tenant, namespace, regex, subscription})
+    {ref, refs} = Map.pop(state.refs, {tenant, namespace, topic, subscription})
 
     if ref != nil do
       Process.cancel_timer(ref)
@@ -287,14 +274,14 @@ defmodule PulsarEx.ConsumerManager do
 
     state = %State{state | refs: refs}
 
-    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, regex) do
+    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, topic) do
       {:ok, topic_names} ->
         do_stop_consumers(topic_names, subscription, state)
         {:reply, :ok, state}
 
       {:error, err} ->
         Logger.error(
-          "Error discovering topics for #{tenant}/#{namespace}, on cluster #{cluster}, #{inspect(err)}"
+          "Error discovering topics for tenant: #{inspect(tenant)}, namespace: #{inspect(namespace)}, topic: #{inspect(topic)}, on cluster #{state.cluster}, #{inspect(err)}"
         )
 
         {:reply, {:error, err}, state}
@@ -336,30 +323,30 @@ defmodule PulsarEx.ConsumerManager do
 
   @impl true
   def handle_info(
-        {:refresh, tenant, namespace, regex, subscription, module, consumer_opts},
+        {:refresh, tenant, namespace, topic, subscription, module, consumer_opts},
         state
       ) do
     refresh_interval = Keyword.get(consumer_opts, :refresh_interval, @refresh_interval)
 
-    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, regex) do
+    case Admin.discover_topics(state.brokers, state.admin_port, tenant, namespace, topic) do
       {:ok, topic_names} ->
         do_start_consumers(topic_names, subscription, module, consumer_opts, state)
 
       {:error, err} ->
         Logger.error(
-          "Error discovering topics for #{tenant}/#{namespace}, on cluster #{state.cluster}, #{inspect(err)}"
+          "Error discovering topics for tenant: #{inspect(tenant)}, namespace: #{inspect(namespace)}, topic: #{inspect(topic)}, on cluster #{state.cluster}, #{inspect(err)}"
         )
     end
 
     ref =
       Process.send_after(
         self(),
-        {:refresh, tenant, namespace, regex, subscription, module, consumer_opts},
+        {:refresh, tenant, namespace, topic, subscription, module, consumer_opts},
         refresh_interval + :rand.uniform(refresh_interval)
       )
 
     {:noreply,
-     %State{state | refs: Map.put(state.refs, {tenant, namespace, regex, subscription}, ref)}}
+     %State{state | refs: Map.put(state.refs, {tenant, namespace, topic, subscription}, ref)}}
   end
 
   @impl true

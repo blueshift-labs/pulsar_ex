@@ -166,14 +166,195 @@ defmodule PulsarEx.Admin do
     end
   end
 
-  def discover_topics(hosts, admin_port, tenant, namespace, regex) do
-    with {:ok, partitioned_topics} <-
-           lookup_partitioned_topics(hosts, admin_port, tenant, namespace),
-         {:ok, topics} <- lookup_topics(hosts, admin_port, tenant, namespace) do
-      topics = Enum.filter(partitioned_topics ++ topics, &Regex.match?(regex, &1))
-      {:ok, topics}
+  defp lookup_tenants(hosts, admin_port) when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case lookup_tenants(host, admin_port) do
+        {:ok, tenants} -> {:halt, {:ok, tenants}}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  defp lookup_tenants(host, admin_port) do
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/tenants"
+    }
+
+    with {:ok, 200, _, client_ref} <-
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+         {:ok, body} <- :hackney.body(client_ref),
+         {:ok, tenants} <- Jason.decode(body) do
+      {:ok, tenants}
     else
-      {:error, err} -> {:error, err}
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  defp lookup_namespaces(hosts, admin_port, tenant) when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case lookup_namespaces(host, admin_port, tenant) do
+        {:ok, namespaces} -> {:halt, {:ok, namespaces}}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  defp lookup_namespaces(host, admin_port, tenant) do
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/namespaces/#{tenant}"
+    }
+
+    with {:ok, 200, _, client_ref} <-
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+         {:ok, body} <- :hackney.body(client_ref),
+         {:ok, namespaces} <- Jason.decode(body) do
+      {:ok, namespaces}
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  defp discover_tenants(hosts, admin_port, %Regex{} = tenant_regex) do
+    with {:ok, tenants} <- lookup_tenants(hosts, admin_port) do
+      tenants = Enum.filter(tenants, &Regex.match?(tenant_regex, &1))
+      {:ok, tenants}
+    end
+  end
+
+  defp discover_tenants(hosts, admin_port, tenant_name) do
+    with {:ok, tenants} <- lookup_tenants(hosts, admin_port) do
+      tenants = Enum.filter(tenants, &(tenant_name == &1))
+      {:ok, tenants}
+    end
+  end
+
+  defp discover_namespaces(hosts, admin_port, tenant, %Regex{} = namespace_regex) do
+    with {:ok, tenants} <- discover_tenants(hosts, admin_port, tenant) do
+      Enum.reduce_while(tenants, {:ok, []}, fn tenant, {:ok, acc} ->
+        case lookup_namespaces(hosts, admin_port, tenant) do
+          {:ok, namespaces} ->
+            namespaces =
+              namespaces
+              |> Enum.map(&String.split(&1, "/", parts: 2))
+              |> Enum.filter(fn [_, namespace] ->
+                Regex.match?(namespace_regex, namespace)
+              end)
+              |> Enum.map(fn [tenant, namespace] ->
+                {tenant, namespace}
+              end)
+
+            {:cont, {:ok, acc ++ namespaces}}
+
+          {:error, err} ->
+            {:halt, {:error, err}}
+        end
+      end)
+    end
+  end
+
+  defp discover_namespaces(hosts, admin_port, tenant, namespace_name) do
+    with {:ok, tenants} <- discover_tenants(hosts, admin_port, tenant) do
+      Enum.reduce_while(tenants, {:ok, []}, fn tenant, {:ok, acc} ->
+        case lookup_namespaces(hosts, admin_port, tenant) do
+          {:ok, namespaces} ->
+            namespaces =
+              namespaces
+              |> Enum.map(&String.split(&1, "/", parts: 2))
+              |> Enum.filter(fn [_, namespace] ->
+                namespace_name == namespace
+              end)
+              |> Enum.map(fn [tenant, namespace] ->
+                {tenant, namespace}
+              end)
+
+            {:cont, {:ok, acc ++ namespaces}}
+
+          {:error, err} ->
+            {:halt, {:error, err}}
+        end
+      end)
+    end
+  end
+
+  def discover_topics(hosts, admin_port, tenant, namespace, %Regex{} = topic_regex) do
+    with {:ok, namespaces} <- discover_namespaces(hosts, admin_port, tenant, namespace) do
+      Enum.reduce_while(namespaces, {:ok, []}, fn {tenant, namespace}, {:ok, acc} ->
+        with {:ok, partitioned_topics} <-
+               lookup_partitioned_topics(hosts, admin_port, tenant, namespace),
+             {:ok, topics} <- lookup_topics(hosts, admin_port, tenant, namespace) do
+          Enum.reduce_while(partitioned_topics ++ topics, {:ok, []}, fn topic, {:ok, acc} ->
+            case Topic.parse(topic) do
+              {:ok, %Topic{} = topic} ->
+                if Regex.match?(topic_regex, topic.topic) do
+                  {:cont, {:ok, [Topic.to_name(topic) | acc]}}
+                else
+                  {:cont, {:ok, acc}}
+                end
+
+              {:error, err} ->
+                {:halt, {:error, err}}
+            end
+          end)
+        end
+        |> case do
+          {:ok, topics} ->
+            {:cont, {:ok, acc ++ topics}}
+
+          {:error, err} ->
+            {:halt, {:error, err}}
+        end
+      end)
+    end
+  end
+
+  def discover_topics(hosts, admin_port, tenant, namespace, topic_name) do
+    with {:ok, namespaces} <- discover_namespaces(hosts, admin_port, tenant, namespace) do
+      Enum.reduce_while(namespaces, {:ok, []}, fn {tenant, namespace}, {:ok, acc} ->
+        with {:ok, partitioned_topics} <-
+               lookup_partitioned_topics(hosts, admin_port, tenant, namespace),
+             {:ok, topics} <- lookup_topics(hosts, admin_port, tenant, namespace) do
+          Enum.reduce_while(partitioned_topics ++ topics, {:ok, []}, fn topic, {:ok, acc} ->
+            case Topic.parse(topic) do
+              {:ok, %Topic{} = topic} ->
+                if topic_name == topic.topic do
+                  {:cont, {:ok, [Topic.to_name(topic) | acc]}}
+                else
+                  {:cont, {:ok, acc}}
+                end
+
+              {:error, err} ->
+                {:halt, {:error, err}}
+            end
+          end)
+        end
+        |> case do
+          {:ok, topics} ->
+            {:cont, {:ok, acc ++ topics}}
+
+          {:error, err} ->
+            {:halt, {:error, err}}
+        end
+      end)
     end
   end
 end

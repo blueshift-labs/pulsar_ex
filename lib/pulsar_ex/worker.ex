@@ -373,31 +373,25 @@ defmodule PulsarEx.Worker do
 
         {cluster, opts} = Keyword.pop(opts, :cluster, cluster())
         {subscription, opts} = Keyword.pop_lazy(opts, :subscription, &subscription/0)
-        {topic, opts} = Keyword.pop(opts, :topic)
-        {regex, opts} = Keyword.pop(opts, :regex)
-
         subscription = "#{subscription}"
 
-        case {topic, regex} do
-          {nil, nil} ->
-            raise "topic undefined"
+        {tenant, opts} = Keyword.pop(opts, :tenant)
+        {topic, opts} = Keyword.pop!(opts, :topic)
 
-          {nil, _} ->
-            {tenant, opts} = Keyword.pop!(opts, :tenant)
-            {namespace, opts} = Keyword.pop!(opts, :namespace)
+        if tenant do
+          {namespace, opts} = Keyword.pop!(opts, :namespace)
 
-            PulsarEx.Clusters.start_consumer(
-              cluster,
-              tenant,
-              namespace,
-              regex,
-              subscription,
-              __MODULE__,
-              opts
-            )
-
-          {_, nil} ->
-            PulsarEx.Clusters.start_consumer(cluster, topic, subscription, __MODULE__, opts)
+          PulsarEx.Clusters.start_consumer(
+            cluster,
+            tenant,
+            namespace,
+            topic,
+            subscription,
+            __MODULE__,
+            opts
+          )
+        else
+          PulsarEx.Clusters.start_consumer(cluster, topic, subscription, __MODULE__, opts)
         end
       end
 
@@ -406,23 +400,16 @@ defmodule PulsarEx.Worker do
 
         {cluster, opts} = Keyword.pop(opts, :cluster, cluster())
         {subscription, opts} = Keyword.pop_lazy(opts, :subscription, &subscription/0)
-        {topic, opts} = Keyword.pop(opts, :topic)
-        {regex, opts} = Keyword.pop(opts, :regex)
-
         subscription = "#{subscription}"
 
-        case {topic, regex} do
-          {nil, nil} ->
-            raise "topic undefined"
+        {tenant, opts} = Keyword.pop(opts, :tenant)
+        {topic, opts} = Keyword.pop!(opts, :topic)
 
-          {nil, _} ->
-            {tenant, opts} = Keyword.pop!(opts, :tenant)
-            {namespace, opts} = Keyword.pop!(opts, :namespace)
-
-            PulsarEx.Clusters.stop_consumer(cluster, tenant, namespace, regex, subscription)
-
-          {_, nil} ->
-            PulsarEx.Clusters.stop_consumer(cluster, topic, subscription)
+        if tenant do
+          {namespace, opts} = Keyword.pop!(opts, :namespace)
+          PulsarEx.Clusters.stop_consumer(cluster, tenant, namespace, topic, subscription)
+        else
+          PulsarEx.Clusters.stop_consumer(cluster, topic, subscription)
         end
       end
     end

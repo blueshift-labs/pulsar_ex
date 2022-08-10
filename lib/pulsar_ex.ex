@@ -99,12 +99,12 @@ defmodule PulsarEx do
       DynamicSupervisor.which_children(ConsumerManager.consumers(cluster))
     end
 
-    def start_consumer(cluster, tenant, namespace, regex, subscription, module, opts) do
+    def start_consumer(cluster, tenant, namespace, topic, subscription, module, opts) do
       ConsumerManager.start_consumer(
         cluster,
         tenant,
         namespace,
-        regex,
+        topic,
         subscription,
         module,
         opts
@@ -119,8 +119,8 @@ defmodule PulsarEx do
       ConsumerManager.start_consumer(cluster, topic_name, partitions, subscription, module, opts)
     end
 
-    def stop_consumer(cluster, tenant, namespace, regex, subscription) do
-      ConsumerManager.stop_consumer(cluster, tenant, namespace, regex, subscription)
+    def stop_consumer(cluster, tenant, namespace, topic, subscription) do
+      ConsumerManager.stop_consumer(cluster, tenant, namespace, topic, subscription)
     end
 
     def stop_consumer(cluster, topic_name, subscription) do
@@ -175,8 +175,8 @@ defmodule PulsarEx do
     DynamicSupervisor.which_children(ConsumerManager.consumers(:default))
   end
 
-  def start_consumer(tenant, namespace, regex, subscription, module, opts) do
-    ConsumerManager.start_consumer(:default, tenant, namespace, regex, subscription, module, opts)
+  def start_consumer(tenant, namespace, topic, subscription, module, opts) do
+    ConsumerManager.start_consumer(:default, tenant, namespace, topic, subscription, module, opts)
   end
 
   def start_consumer(topic_name, subscription, module, opts) do
@@ -187,8 +187,8 @@ defmodule PulsarEx do
     ConsumerManager.start_consumer(:default, topic_name, partitions, subscription, module, opts)
   end
 
-  def stop_consumer(tenant, namespace, regex, subscription) do
-    ConsumerManager.stop_consumer(:default, tenant, namespace, regex, subscription)
+  def stop_consumer(tenant, namespace, topic, subscription) do
+    ConsumerManager.stop_consumer(:default, tenant, namespace, topic, subscription)
   end
 
   def stop_consumer(topic_name, subscription) do
