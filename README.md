@@ -12,19 +12,23 @@ def deps do
 end
 ```
 
+## Usage
+### Creating Producer
+```
+PulsarEx.produce("persistent://public/default/test.json", "test")
+```
 
-PulsarEx.produce("persistent://public/default/10000.json", "test")
-
+### Creating Consumer
+```
 defmodule TestWorker do
   use PulsarEx.Worker,
     otp_app: :pulsar_ex,
     topic: "persistent://public/default/test.json",
-    subscription: "test",
-    jobs: [:backfill_account, :backfill_partition, :backfill_collection, :backfill_user]
+    subscription: "test"
 
-  def handle_job(job, job_state) do
-    IO.inspect(job)
-    IO.inspect(job_state)
+  def handle_job(%JobState{} = message) do
+    IO.inspect(message)
     :ok
   end
 end
+```
