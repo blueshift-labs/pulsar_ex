@@ -357,4 +357,184 @@ defmodule PulsarEx.Admin do
       end)
     end
   end
+
+  def discover_clusters(host, admin_port) when is_binary(host) do
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/clusters"
+    }
+
+    with {:ok, 200, _, client_ref} <-
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+         {:ok, body} <- :hackney.body(client_ref) do
+      Jason.decode(body)
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  def discover_clusters(hosts, admin_port) when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case discover_clusters(host, admin_port) do
+        {:ok, clusters} -> {:halt, {:ok, clusters}}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  def create_tenant(host, admin_port, tenant, clusters) when is_binary(host) do
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/tenants/#{tenant}"
+    }
+
+    body = Jason.encode!(%{"allowedClusters" => clusters})
+
+    with {:ok, status, _, _} when status in [204, 409] <-
+           :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], body,
+             follow_redirect: true
+           ) do
+      :ok
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  def create_tenant(hosts, admin_port, tenant, clusters) when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case create_tenant(host, admin_port, tenant, clusters) do
+        :ok -> {:halt, :ok}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  def create_namespace(host, admin_port, tenant, namespace, policies \\ %{})
+
+  def create_namespace(host, admin_port, tenant, namespace, policies) when is_binary(host) do
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/namespaces/#{tenant}/#{namespace}"
+    }
+
+    body = Jason.encode!(policies)
+
+    with {:ok, status, _, _} when status in [204, 409] <-
+           :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], body,
+             follow_redirect: true
+           ) do
+      :ok
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  def create_namespace(hosts, admin_port, tenant, namespace, policies) when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case create_namespace(host, admin_port, tenant, namespace, policies) do
+        :ok -> {:halt, :ok}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  def create_topic(host, admin_port, tenant, namespace, topic) when is_binary(host) do
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/persistent/#{tenant}/#{namespace}/#{topic}"
+    }
+
+    with {:ok, status, _, _} when status in [204, 409] <-
+           :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], "",
+             follow_redirect: true
+           ) do
+      :ok
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  def create_topic(hosts, admin_port, tenant, namespace, topic) when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case create_topic(host, admin_port, tenant, namespace, topic) do
+        :ok -> {:halt, :ok}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  def create_partitioned_topic(host, admin_port, tenant, namespace, topic, partitions)
+      when is_binary(host) do
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/persistent/#{tenant}/#{namespace}/#{topic}/partitions"
+    }
+
+    with {:ok, status, _, _} when status in [204, 409] <-
+           :hackney.put(
+             URI.to_string(url),
+             [{"Content-Type", "application/json"}],
+             "#{partitions}",
+             follow_redirect: true
+           ) do
+      :ok
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  def create_partitioned_topic(hosts, admin_port, tenant, namespace, topic, partitions)
+      when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case create_partitioned_topic(host, admin_port, tenant, namespace, topic, partitions) do
+        :ok -> {:halt, :ok}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
 end
