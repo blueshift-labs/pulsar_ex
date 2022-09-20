@@ -662,7 +662,7 @@ defmodule PulsarEx.Connection do
             "Closing producer #{producer_id} on broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
           )
         else
-          Logger.info(
+          Logger.debug(
             "Closing producer #{producer_id} on broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
           )
         end
@@ -699,7 +699,7 @@ defmodule PulsarEx.Connection do
             "Stopping consumer #{consumer_id} on broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
           )
         else
-          Logger.info(
+          Logger.debug(
             "Stopping consumer #{consumer_id} on broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
           )
         end

@@ -353,17 +353,17 @@ defmodule PulsarEx.ConsumerManager do
   def terminate(reason, state) do
     case reason do
       :shutdown ->
-        Logger.info(
+        Logger.debug(
           "Shutting down Consumer Manager, on cluster #{state.cluster}, #{inspect(reason)}"
         )
 
       :normal ->
-        Logger.info(
+        Logger.debug(
           "Shutting down Consumer Manager, on cluster #{state.cluster}, #{inspect(reason)}"
         )
 
       {:shutdown, _} ->
-        Logger.info(
+        Logger.debug(
           "Shutting down Consumer Manager, on cluster #{state.cluster}, #{inspect(reason)}"
         )
 
