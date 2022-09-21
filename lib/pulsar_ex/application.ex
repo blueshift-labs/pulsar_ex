@@ -62,6 +62,7 @@ defmodule PulsarEx.Application do
         cluster = Keyword.get(cluster_opts, :cluster, :default)
         cluster = String.to_atom("#{cluster}")
         cluster_opts = Keyword.put(cluster_opts, :cluster, cluster)
+        PulsarEx.Cluster.setup!(cluster_opts)
         Supervisor.child_spec({ClusterSupervisor, cluster_opts}, id: {ClusterSupervisor, cluster})
       end)
 

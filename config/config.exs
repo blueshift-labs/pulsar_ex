@@ -46,7 +46,12 @@ config :pulsar_ex,
         #   num_consumers: 30,
         #   module: PulsarEx.DefaultWorker
         # ]
-      ]
+      ],
+      auto_setup: true,
+      tenants: [],
+      namespaces: [],
+      topics: [],
+      partitioned_topics: []
     ]
   ],
   cluster: :default,

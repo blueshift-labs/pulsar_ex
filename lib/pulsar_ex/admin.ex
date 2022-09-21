@@ -427,14 +427,14 @@ defmodule PulsarEx.Admin do
     end)
   end
 
-  def create_namespace(host, admin_port, tenant, namespace, policies \\ %{})
+  def create_namespace(host, admin_port, namespace, policies \\ %{})
 
-  def create_namespace(host, admin_port, tenant, namespace, policies) when is_binary(host) do
+  def create_namespace(host, admin_port, namespace, policies) when is_binary(host) do
     url = %URI{
       scheme: "http",
       host: host,
       port: admin_port,
-      path: "/admin/v2/namespaces/#{tenant}/#{namespace}"
+      path: "/admin/v2/namespaces/#{namespace}"
     }
 
     body = Jason.encode!(policies)
@@ -454,23 +454,25 @@ defmodule PulsarEx.Admin do
     end
   end
 
-  def create_namespace(hosts, admin_port, tenant, namespace, policies) when is_list(hosts) do
+  def create_namespace(hosts, admin_port, namespace, policies) when is_list(hosts) do
     hosts
     |> Enum.shuffle()
     |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
-      case create_namespace(host, admin_port, tenant, namespace, policies) do
+      case create_namespace(host, admin_port, namespace, policies) do
         :ok -> {:halt, :ok}
         {:error, err} -> {:cont, {:error, err}}
       end
     end)
   end
 
-  def create_topic(host, admin_port, tenant, namespace, topic) when is_binary(host) do
+  def create_topic(host, admin_port, topic) when is_binary(host) do
+    topic = String.replace(topic, "://", "/")
+
     url = %URI{
       scheme: "http",
       host: host,
       port: admin_port,
-      path: "/admin/v2/persistent/#{tenant}/#{namespace}/#{topic}"
+      path: "/admin/v2/#{topic}"
     }
 
     with {:ok, status, _, _} when status in [204, 409] <-
@@ -488,24 +490,28 @@ defmodule PulsarEx.Admin do
     end
   end
 
-  def create_topic(hosts, admin_port, tenant, namespace, topic) when is_list(hosts) do
+  def create_topic(hosts, admin_port, topic) when is_list(hosts) do
     hosts
     |> Enum.shuffle()
     |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
-      case create_topic(host, admin_port, tenant, namespace, topic) do
+      case create_topic(host, admin_port, topic) do
         :ok -> {:halt, :ok}
         {:error, err} -> {:cont, {:error, err}}
       end
     end)
   end
 
-  def create_partitioned_topic(host, admin_port, tenant, namespace, topic, partitions)
+  def create_partitioned_topic(hosts, admin_port, topic, partitions \\ 1)
+
+  def create_partitioned_topic(host, admin_port, topic, partitions)
       when is_binary(host) do
+    topic = String.replace(topic, "://", "/")
+
     url = %URI{
       scheme: "http",
       host: host,
       port: admin_port,
-      path: "/admin/v2/persistent/#{tenant}/#{namespace}/#{topic}/partitions"
+      path: "/admin/v2/#{topic}/partitions"
     }
 
     with {:ok, status, _, _} when status in [204, 409] <-
@@ -526,12 +532,12 @@ defmodule PulsarEx.Admin do
     end
   end
 
-  def create_partitioned_topic(hosts, admin_port, tenant, namespace, topic, partitions)
+  def create_partitioned_topic(hosts, admin_port, topic, partitions)
       when is_list(hosts) do
     hosts
     |> Enum.shuffle()
     |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
-      case create_partitioned_topic(host, admin_port, tenant, namespace, topic, partitions) do
+      case create_partitioned_topic(host, admin_port, topic, partitions) do
         :ok -> {:halt, :ok}
         {:error, err} -> {:cont, {:error, err}}
       end
