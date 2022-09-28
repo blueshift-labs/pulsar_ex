@@ -378,7 +378,7 @@ defmodule PulsarEx.Worker do
         {tenant, opts} = Keyword.pop(opts, :tenant)
         {topic, opts} = Keyword.pop!(opts, :topic)
 
-        if tenant do
+        unless fully_quantified_topic?(topic) do
           {namespace, opts} = Keyword.pop!(opts, :namespace)
 
           PulsarEx.Clusters.start_consumer(
@@ -405,13 +405,17 @@ defmodule PulsarEx.Worker do
         {tenant, opts} = Keyword.pop(opts, :tenant)
         {topic, opts} = Keyword.pop!(opts, :topic)
 
-        if tenant do
+        unless fully_quantified_topic?(topic) do
           {namespace, opts} = Keyword.pop!(opts, :namespace)
           PulsarEx.Clusters.stop_consumer(cluster, tenant, namespace, topic, subscription)
         else
           PulsarEx.Clusters.stop_consumer(cluster, topic, subscription)
         end
       end
+
+      defp fully_quantified_topic?("persistent://" <> _), do: true
+      defp fully_quantified_topic?("non-persistent://" <> _), do: true
+      defp fully_quantified_topic?(_), do: false
     end
   end
 end
