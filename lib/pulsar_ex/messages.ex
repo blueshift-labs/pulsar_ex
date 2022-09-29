@@ -1,6 +1,7 @@
 defmodule PulsarEx.ProducerMessage do
   @enforce_keys [:payload]
   defstruct [
+    :compression,
     :producer_id,
     :sequence_id,
     :producer_name,

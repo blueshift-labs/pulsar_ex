@@ -21,6 +21,7 @@ defmodule PulsarEx.PartitionedProducer do
       :batch,
       :pending_send,
       :last_sequence_id,
+      :compression,
       :producer_opts,
       :connection_attempt,
       :max_connection_attempts
@@ -47,6 +48,7 @@ defmodule PulsarEx.PartitionedProducer do
       :batch,
       :pending_send,
       :last_sequence_id,
+      :compression,
       :producer_opts,
       :connection_attempt,
       :max_connection_attempts,
@@ -67,6 +69,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   alias PulsarEx.{Topic, Broker, Admin, ConnectionManager, Connection, ProducerMessage}
 
+  @compression :none
   @batch_enabled false
   @batch_size 100
   @compaction_enabled false
@@ -118,6 +121,7 @@ defmodule PulsarEx.PartitionedProducer do
       topic_name: topic_name,
       partition: partition,
       metadata: metadata,
+      compression: Keyword.get(producer_opts, :compression, @compression),
       batch_enabled: Keyword.get(producer_opts, :batch_enabled, @batch_enabled),
       batch_size: max(Keyword.get(producer_opts, :batch_size, @batch_size), 1),
       compaction_enabled: Keyword.get(producer_opts, :compaction_enabled, @compaction_enabled),
@@ -803,6 +807,7 @@ defmodule PulsarEx.PartitionedProducer do
       producer_id: state.producer_id,
       producer_name: state.producer_name,
       sequence_id: state.last_sequence_id + 1,
+      compression: state.compression,
       payload: payload,
       properties: Map.get(message_opts, :properties),
       partition_key: Map.get(message_opts, :partition_key),

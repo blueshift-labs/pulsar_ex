@@ -13,6 +13,13 @@ defmodule PulsarEx.IO do
   def subscription_type(:key_shared), do: :Key_Shared
   def subscription_type(type), do: type
 
+  def compression_type(:none), do: :NONE
+  def compression_type(:lz4), do: :LZ4
+  def compression_type(:zlib), do: :ZLIB
+  def compression_type(:zstd), do: :ZSTD
+  def compression_type(:snappy), do: :SNAPPY
+  def compression_type(type), do: type
+
   def initial_position(:latest), do: :Latest
   def initial_position(:earliest), do: :Earliest
   def initial_position(pos), do: pos
@@ -39,6 +46,7 @@ defmodule PulsarEx.IO do
           producer_id: producer_id,
           producer_name: producer_name,
           sequence_id: sequence_id,
+          compression: compression,
           payload: payload
         } = message
       ) do
@@ -52,10 +60,13 @@ defmodule PulsarEx.IO do
       )
       |> to_base_command()
 
+    compression = compression_type(compression)
+
     metadata =
       Proto.MessageMetadata.new(
         producer_name: producer_name,
         sequence_id: sequence_id,
+        compression: compression,
         publish_time: :os.system_time(:millisecond),
         properties: to_kv(message.properties),
         partition_key: message.partition_key,
@@ -74,6 +85,8 @@ defmodule PulsarEx.IO do
     encoded_metadata = Proto.MessageMetadata.encode(metadata)
     metadata_size = byte_size(encoded_metadata)
 
+    payload = compress(compression, payload)
+
     checksum = :crc32cer.nif(<<metadata_size::32, encoded_metadata::binary, payload::binary>>)
 
     total_size = 4 + command_size + 2 + 4 + 4 + metadata_size + byte_size(payload)
@@ -86,6 +99,7 @@ defmodule PulsarEx.IO do
   def encode_messages(
         [
           %ProducerMessage{
+            compression: compression,
             producer_id: producer_id,
             producer_name: producer_name,
             sequence_id: sequence_id
@@ -105,10 +119,13 @@ defmodule PulsarEx.IO do
       )
       |> to_base_command()
 
+    compression = compression_type(compression)
+
     metadata =
       Proto.MessageMetadata.new(
         producer_name: producer_name,
         sequence_id: sequence_id,
+        compression: compression,
         publish_time: :os.system_time(:millisecond),
         uncompressed_size: byte_size(payload),
         num_messages_in_batch: length(messages),
@@ -121,6 +138,8 @@ defmodule PulsarEx.IO do
 
     encoded_metadata = Proto.MessageMetadata.encode(metadata)
     metadata_size = byte_size(encoded_metadata)
+
+    payload = compress(compression, payload)
 
     checksum = :crc32cer.nif(<<metadata_size::32, encoded_metadata::binary, payload::binary>>)
 
@@ -178,6 +197,7 @@ defmodule PulsarEx.IO do
         <<encoded_metadata::binary-size(metadata_size), payload::binary>> = meta_payload
         metadata = Proto.MessageMetadata.decode(encoded_metadata)
         num_messages = metadata.num_messages_in_batch
+        payload = decompress(metadata.compression, metadata.uncompressed_size, payload)
 
         cond do
           num_messages == nil ->
@@ -210,6 +230,57 @@ defmodule PulsarEx.IO do
       nil -> decode_payload(command, metadata, data, batch_index + 1, messages)
       _ -> decode_payload(command, metadata, data, batch_index + 1, [message | messages])
     end
+  end
+
+  def compress(nil, body) do
+    body
+  end
+
+  def compress(:NONE, body) do
+    body
+  end
+
+  def compress(:LZ4, body) do
+    NimbleLZ4.compress(body)
+  end
+
+  def compress(:ZLIB, _body) do
+    raise "not supported"
+  end
+
+  def compress(:ZSTD, _compressed_body) do
+    raise "not supported"
+  end
+
+  def compress(:SNAPPY, body) do
+    {:ok, compressed_body} = :snappy.compress(body)
+    compressed_body
+  end
+
+  def decompress(nil, _uncompressed_size, compressed_body) do
+    compressed_body
+  end
+
+  def decompress(:NONE, _uncompressed_size, compressed_body) do
+    compressed_body
+  end
+
+  def decompress(:LZ4, uncompressed_size, compressed_body) do
+    {:ok, body} = NimbleLZ4.decompress(compressed_body, uncompressed_size)
+    body
+  end
+
+  def decompress(:ZLIB, _uncompressed_size, _compressed_body) do
+    raise "not supported"
+  end
+
+  def decompress(:ZSTD, _uncompressed_size, _compressed_body) do
+    raise "not supported"
+  end
+
+  def decompress(:SNAPPY, _uncompressed_size, compressed_body) do
+    {:ok, body} = :snappy.decompress(compressed_body)
+    body
   end
 
   def to_consumer_message(
