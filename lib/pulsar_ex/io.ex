@@ -240,8 +240,10 @@ defmodule PulsarEx.IO do
     body
   end
 
-  def compress(:LZ4, body) do
-    NimbleLZ4.compress(body)
+  if Code.ensure_loaded?(NimbleLZ4) do
+    def compress(:LZ4, body) do
+      NimbleLZ4.compress(body)
+    end
   end
 
   def compress(:ZLIB, _body) do
@@ -252,9 +254,11 @@ defmodule PulsarEx.IO do
     raise "not supported"
   end
 
-  def compress(:SNAPPY, body) do
-    {:ok, compressed_body} = :snappy.compress(body)
-    compressed_body
+  if Code.ensure_loaded?(:snappy) do
+    def compress(:SNAPPY, body) do
+      {:ok, compressed_body} = :snappy.compress(body)
+      compressed_body
+    end
   end
 
   def decompress(nil, _uncompressed_size, compressed_body) do
@@ -265,9 +269,11 @@ defmodule PulsarEx.IO do
     compressed_body
   end
 
-  def decompress(:LZ4, uncompressed_size, compressed_body) do
-    {:ok, body} = NimbleLZ4.decompress(compressed_body, uncompressed_size)
-    body
+  if Code.ensure_loaded?(NimbleLZ4) do
+    def decompress(:LZ4, uncompressed_size, compressed_body) do
+      {:ok, body} = NimbleLZ4.decompress(compressed_body, uncompressed_size)
+      body
+    end
   end
 
   def decompress(:ZLIB, _uncompressed_size, _compressed_body) do
@@ -278,9 +284,11 @@ defmodule PulsarEx.IO do
     raise "not supported"
   end
 
-  def decompress(:SNAPPY, _uncompressed_size, compressed_body) do
-    {:ok, body} = :snappy.decompress(compressed_body)
-    body
+  if Code.ensure_loaded?(:snappy) do
+    def decompress(:SNAPPY, _uncompressed_size, compressed_body) do
+      {:ok, body} = :snappy.decompress(compressed_body)
+      body
+    end
   end
 
   def to_consumer_message(
