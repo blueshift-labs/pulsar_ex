@@ -254,11 +254,8 @@ defmodule PulsarEx.IO do
     raise "not supported"
   end
 
-  if Code.ensure_loaded?(:snappy) do
-    def compress(:SNAPPY, body) do
-      {:ok, compressed_body} = :snappy.compress(body)
-      compressed_body
-    end
+  def compress(:SNAPPY, _body) do
+    raise "not supported"
   end
 
   def decompress(nil, _uncompressed_size, compressed_body) do
@@ -284,11 +281,8 @@ defmodule PulsarEx.IO do
     raise "not supported"
   end
 
-  if Code.ensure_loaded?(:snappy) do
-    def decompress(:SNAPPY, _uncompressed_size, compressed_body) do
-      {:ok, body} = :snappy.decompress(compressed_body)
-      body
-    end
+  def decompress(:SNAPPY, _uncompressed_size, _compressed_body) do
+    raise "not supported"
   end
 
   def to_consumer_message(

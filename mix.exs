@@ -33,8 +33,6 @@ defmodule PulsarEx.MixProject do
 
   defp deps do
     [
-      {:snappy,
-       git: "https://github.com/skunkwerks/snappy-erlang-nif.git", tag: "1.1.2", optional: true},
       {:nimble_lz4, "~> 0.1.2", optional: true},
       {:hackney, "~> 1.18"},
       {:crc32cer, "0.1.10"},

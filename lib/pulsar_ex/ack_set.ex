@@ -3,7 +3,7 @@ defmodule PulsarEx.AckSet do
 
   alias __MODULE__
 
-  use Bitwise
+  import Bitwise
 
   def new(size) do
     %AckSet{data: <<(1 <<< (size + 1)) - 1::size(size)>>}

@@ -1,3 +1,4 @@
 python 2.7.18
-erlang 24.0
-elixir 1.13.4-otp-24
+erlang 25.1.1
+elixir 1.14.0-otp-25
+rebar 3.18.0
