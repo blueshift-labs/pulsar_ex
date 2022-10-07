@@ -4,8 +4,8 @@ defmodule PulsarEx.MixProject do
   def project do
     [
       app: :pulsar_ex,
-      version: "0.11.0",
-      elixir: "~> 1.11",
+      version: "0.12.8",
+      elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       test_paths: test_paths(Mix.env()),
