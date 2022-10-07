@@ -1,7 +1,13 @@
-changes
-  package pulsar.proto;   =>   package pulsar_ex.proto;
+In priv/pulsar_api.proto, change from official pulsar 2.10 proto
+1.  package pulsar.proto;   =>   package pulsar_ex.proto;
+2.  optional int32 num_messages_in_batch = 11 [default = 1];   =>   optional int32 num_messages_in_batch = 11;
 
-  optional int32 num_messages_in_batch = 11 [default = 1];   =>   optional int32 num_messages_in_batch = 11;
+To generate elixir protocol:
 
-
-protoc --elixir_out=lib/pulsar/proto.ex priv/pulsar_api.proto
+```
+  brew install protobuf
+  asdf reshim
+  mix escript.install hex protobuf
+  protoc --elixir_out=./ priv/pulsar_api.proto
+  mv priv/pulsar_api.pb.ex lib/pulsar_ex/proto.ex
+```

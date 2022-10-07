@@ -36,7 +36,7 @@ defmodule PulsarEx.MixProject do
       {:nimble_lz4, "~> 0.1.2", optional: true},
       {:hackney, "~> 1.18"},
       {:crc32cer, "0.1.10"},
-      {:protobuf, "~> 0.7.1"},
+      {:protobuf, "~> 0.11.0"},
       {:connection, "~> 1.1"},
       {:poolboy, "~> 1.5"},
       {:telemetry, "~> 0.4"},
