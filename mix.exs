@@ -40,7 +40,7 @@ defmodule PulsarEx.MixProject do
       {:connection, "~> 1.1"},
       {:poolboy, "~> 1.5"},
       {:telemetry, "~> 0.4"},
-      {:timex, "~> 3.0"},
+      {:timex, "~> 3.7"},
       {:jason, "~> 1.2"}
     ]
   end
