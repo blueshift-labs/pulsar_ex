@@ -193,8 +193,6 @@ defmodule PulsarEx.Worker do
         def enqueue(params, message_opts \\ [])
 
         def enqueue(params, message_opts) do
-          params = stringify_keys(params)
-
           {topic, message_opts} =
             Keyword.pop_lazy(message_opts, :topic, fn -> topic(params, message_opts) end)
 
@@ -229,8 +227,6 @@ defmodule PulsarEx.Worker do
         def enqueue_job(job, params, message_opts \\ [])
 
         def enqueue_job(job, params, message_opts) when job in @jobs do
-          params = stringify_keys(params)
-
           {topic, message_opts} =
             Keyword.pop_lazy(message_opts, :topic, fn -> topic(job, params, message_opts) end)
 
@@ -364,15 +360,6 @@ defmodule PulsarEx.Worker do
           _ -> job_state.state
         end
       end
-
-      defp stringify_keys(params = %{}) do
-        Enum.into(params, %{}, fn
-          {k, v} when is_atom(k) -> {Atom.to_string(k), stringify_keys(v)}
-          {k, v} -> {k, stringify_keys(v)}
-        end)
-      end
-
-      defp stringify_keys(params), do: params
 
       def start(opts \\ []) do
         workers = Keyword.get(opts, :workers)
