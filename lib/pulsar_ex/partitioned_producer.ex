@@ -26,6 +26,7 @@ defmodule PulsarEx.PartitionedProducer do
       :connection_attempt,
       :max_connection_attempts
     ]
+
     defstruct [
       :cluster,
       :cluster_opts,
@@ -59,7 +60,8 @@ defmodule PulsarEx.PartitionedProducer do
       :producer_name,
       :producer_access_mode,
       :max_message_size,
-      :properties
+      :properties,
+      :terminating
     ]
   end
 
@@ -149,6 +151,15 @@ defmodule PulsarEx.PartitionedProducer do
   def handle_info(:connect, %{state: :connected} = state) do
     Logger.warn(
       "Attempt to double-connect producer #{state.producer_id} for topic #{state.topic_name} to broker #{state.broker_name}, on cluster #{state.cluster}"
+    )
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({[:alias | _ref], reply}, state) do
+    Logger.warn(
+      "Received unexpected reply in producer #{state.producer_id} for topic #{state.topic_name} to broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reply)}"
     )
 
     {:noreply, state}
@@ -538,7 +549,7 @@ defmodule PulsarEx.PartitionedProducer do
         )
     end
 
-    Enum.each(froms, &reply(&1, reply))
+    Enum.each(froms, &reply(&1, reply, state))
 
     {:noreply, %{state | pending_send: nil}}
   end
@@ -570,7 +581,7 @@ defmodule PulsarEx.PartitionedProducer do
         )
     end
 
-    reply(from, reply)
+    reply(from, reply, state)
 
     {:noreply, %{state | pending_send: nil}}
   end
@@ -593,7 +604,13 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def terminate(reason, state) do
-    state = reply_all(state, reason)
+    state = reply_all(%{state | terminating: true}, reason)
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :terminate],
+      %{count: 1},
+      state.metadata
+    )
 
     case reason do
       :shutdown ->
@@ -666,7 +683,7 @@ defmodule PulsarEx.PartitionedProducer do
           state.metadata
         )
 
-        reply(from, reply)
+        reply(from, reply, state)
         %{state | pending_send: nil}
     end
   end
@@ -724,7 +741,7 @@ defmodule PulsarEx.PartitionedProducer do
           state.metadata
         )
 
-        Enum.each(froms, &reply(&1, reply))
+        Enum.each(froms, &reply(&1, reply, state))
         %{state | pending_send: nil}
     end
   end
@@ -821,16 +838,25 @@ defmodule PulsarEx.PartitionedProducer do
     {message, state}
   end
 
-  defp reply(nil, _reply), do: nil
-  defp reply(from, reply), do: GenServer.reply(from, reply)
+  defp reply(nil, _reply, %{terminating: true} = state) do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :drop],
+      %{count: 1},
+      state.metadata
+    )
+  end
+
+  defp reply(nil, _reply, _state), do: nil
+
+  defp reply(from, reply, _state), do: GenServer.reply(from, reply)
 
   defp reply_all(%{pending_send: {_, {_, froms}, _}} = state, reply) when is_list(froms) do
-    Enum.each(froms, &reply(&1, reply))
+    Enum.each(froms, &reply(&1, reply, state))
     reply_all(%{state | pending_send: nil}, reply)
   end
 
   defp reply_all(%{pending_send: {_, {_, from}, _}} = state, reply) do
-    reply(from, reply)
+    reply(from, reply, state)
     reply_all(%{state | pending_send: nil}, reply)
   end
 
@@ -840,14 +866,14 @@ defmodule PulsarEx.PartitionedProducer do
         state
 
       {{:value, {_, _, from}}, queue} ->
-        reply(from, reply)
+        reply(from, reply, state)
         reply_all(%{state | queue: queue}, reply)
 
       {{:value, batch}, queue} ->
         batch
         |> Enum.reverse()
         |> Enum.each(fn {_, _, from} ->
-          reply(from, reply)
+          reply(from, reply, state)
         end)
 
         reply_all(%{state | queue: queue}, reply)
@@ -858,7 +884,7 @@ defmodule PulsarEx.PartitionedProducer do
     batch
     |> Enum.reverse()
     |> Enum.each(fn {_, _, from} ->
-      reply(from, reply)
+      reply(from, reply, state)
     end)
 
     reply_all(%{state | batch: []}, reply)
