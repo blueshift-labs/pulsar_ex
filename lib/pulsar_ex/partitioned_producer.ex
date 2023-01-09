@@ -276,6 +276,16 @@ defmodule PulsarEx.PartitionedProducer do
     {:noreply, state}
   end
 
+  # This is to handle timed-out create producer response from connection
+  @impl true
+  def handle_info({[:alias | _ref], reply}, state) do
+    Logger.warn(
+      "Received unexpected reply in producer #{state.producer_id} for topic #{topic_name} to broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reply)}"
+    )
+
+    {:noreply, state}
+  end
+
   @impl true
   def handle_call(
         {:produce, _, _},

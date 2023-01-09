@@ -70,10 +70,13 @@ defmodule PulsarEx.Connection do
 
   @connection_timeout 5000
   @ping_interval 45_000
-  @request_timeout 60_000
+  @request_timeout 30_000
 
   def create_producer(conn, topic, opts \\ []) do
     GenServer.call(conn, {:create_producer, topic, opts}, @request_timeout)
+  catch
+    :exit, {:timeout, _} ->
+      {:error, :timeout}
   end
 
   def subscribe(conn, topic, subscription, sub_type, opts \\ []) do
