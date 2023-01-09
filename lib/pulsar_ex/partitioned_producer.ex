@@ -26,6 +26,7 @@ defmodule PulsarEx.PartitionedProducer do
       :connection_attempt,
       :max_connection_attempts
     ]
+
     defstruct [
       :cluster,
       :cluster_opts,
@@ -59,7 +60,8 @@ defmodule PulsarEx.PartitionedProducer do
       :producer_name,
       :producer_access_mode,
       :max_message_size,
-      :properties
+      :properties,
+      :terminating
     ]
   end
 
@@ -602,7 +604,7 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def terminate(reason, state) do
-    state = reply_all(state, reason)
+    state = reply_all(%{state | terminating: true}, reason)
 
     case reason do
       :shutdown ->
@@ -830,13 +832,15 @@ defmodule PulsarEx.PartitionedProducer do
     {message, state}
   end
 
-  defp reply(nil, _reply, state) do
+  defp reply(nil, _reply, %{terminating: true} = state) do
     :telemetry.execute(
       [:pulsar_ex, :producer, :drop],
       %{count: 1},
       state.metadata
     )
   end
+
+  defp reply(nil, _reply, _state), do: nil
 
   defp reply(from, reply, _state), do: GenServer.reply(from, reply)
 
