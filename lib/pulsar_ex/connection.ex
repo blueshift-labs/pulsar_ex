@@ -76,6 +76,12 @@ defmodule PulsarEx.Connection do
     GenServer.call(conn, {:create_producer, topic, opts}, @request_timeout)
   catch
     :exit, {:timeout, _} ->
+      :telemetry.execute(
+        [:pulsar_ex, :producer, :timeout],
+        %{count: 1},
+        %{}
+      )
+
       {:error, :timeout}
   end
 
