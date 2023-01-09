@@ -606,6 +606,12 @@ defmodule PulsarEx.PartitionedProducer do
   def terminate(reason, state) do
     state = reply_all(%{state | terminating: true}, reason)
 
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :terminate],
+      %{count: 1},
+      state.metadata
+    )
+
     case reason do
       :shutdown ->
         Logger.debug(
