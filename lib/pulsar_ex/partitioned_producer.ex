@@ -547,7 +547,7 @@ defmodule PulsarEx.PartitionedProducer do
         )
     end
 
-    Enum.each(froms, &reply(&1, reply))
+    Enum.each(froms, &reply(&1, reply, state))
 
     {:noreply, %{state | pending_send: nil}}
   end
@@ -579,7 +579,7 @@ defmodule PulsarEx.PartitionedProducer do
         )
     end
 
-    reply(from, reply)
+    reply(from, reply, state)
 
     {:noreply, %{state | pending_send: nil}}
   end
@@ -675,7 +675,7 @@ defmodule PulsarEx.PartitionedProducer do
           state.metadata
         )
 
-        reply(from, reply)
+        reply(from, reply, state)
         %{state | pending_send: nil}
     end
   end
@@ -733,7 +733,7 @@ defmodule PulsarEx.PartitionedProducer do
           state.metadata
         )
 
-        Enum.each(froms, &reply(&1, reply))
+        Enum.each(froms, &reply(&1, reply, state))
         %{state | pending_send: nil}
     end
   end
@@ -830,16 +830,23 @@ defmodule PulsarEx.PartitionedProducer do
     {message, state}
   end
 
-  defp reply(nil, _reply), do: nil
-  defp reply(from, reply), do: GenServer.reply(from, reply)
+  defp reply(nil, _reply, state) do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :drop],
+      %{count: 1},
+      state.metadata
+    )
+  end
+
+  defp reply(from, reply, _state), do: GenServer.reply(from, reply)
 
   defp reply_all(%{pending_send: {_, {_, froms}, _}} = state, reply) when is_list(froms) do
-    Enum.each(froms, &reply(&1, reply))
+    Enum.each(froms, &reply(&1, reply, state))
     reply_all(%{state | pending_send: nil}, reply)
   end
 
   defp reply_all(%{pending_send: {_, {_, from}, _}} = state, reply) do
-    reply(from, reply)
+    reply(from, reply, state)
     reply_all(%{state | pending_send: nil}, reply)
   end
 
@@ -849,14 +856,14 @@ defmodule PulsarEx.PartitionedProducer do
         state
 
       {{:value, {_, _, from}}, queue} ->
-        reply(from, reply)
+        reply(from, reply, state)
         reply_all(%{state | queue: queue}, reply)
 
       {{:value, batch}, queue} ->
         batch
         |> Enum.reverse()
         |> Enum.each(fn {_, _, from} ->
-          reply(from, reply)
+          reply(from, reply, state)
         end)
 
         reply_all(%{state | queue: queue}, reply)
@@ -867,7 +874,7 @@ defmodule PulsarEx.PartitionedProducer do
     batch
     |> Enum.reverse()
     |> Enum.each(fn {_, _, from} ->
-      reply(from, reply)
+      reply(from, reply, state)
     end)
 
     reply_all(%{state | batch: []}, reply)
