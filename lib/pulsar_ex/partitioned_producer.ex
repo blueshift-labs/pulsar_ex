@@ -639,6 +639,10 @@ defmodule PulsarEx.PartitionedProducer do
           "Stopping producer #{state.producer_id} for topic #{state.topic_name} from broker #{state.broker_name}, on cluster #{state.cluster}, #{inspect(reason)}"
         )
 
+        Rollbax.report_message(:error, "producer exit", %{
+          reason: inspect(reason)
+        })
+
         :telemetry.execute(
           [:pulsar_ex, :producer, :exit],
           %{count: 1},
