@@ -75,12 +75,16 @@ defmodule PulsarEx.Connection do
   def create_producer(conn, topic, opts \\ []) do
     GenServer.call(conn, {:create_producer, topic, opts}, @request_timeout)
   catch
-    :exit, {:timeout, _} ->
+    :exit, err ->
       :telemetry.execute(
         [:pulsar_ex, :producer, :timeout],
         %{count: 1},
         %{}
       )
+
+      Rollbax.report_message(:error, "exit create producer", %{
+        error: inspect(err)
+      })
 
       {:error, :timeout}
   end
