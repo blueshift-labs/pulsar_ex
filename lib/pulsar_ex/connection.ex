@@ -82,10 +82,6 @@ defmodule PulsarEx.Connection do
         %{}
       )
 
-      Rollbax.report_message(:error, "exit create producer", %{
-        error: inspect(err)
-      })
-
       {:error, :timeout}
   end
 
