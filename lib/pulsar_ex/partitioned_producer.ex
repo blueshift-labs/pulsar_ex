@@ -295,7 +295,7 @@ defmodule PulsarEx.PartitionedProducer do
       )
       when queue_size + 1 > max_queue_size do
     :telemetry.execute(
-      [:pulsar_ex, :producer, :send, :error],
+      [:pulsar_ex, :producer, :send, :overflow],
       %{count: 1},
       state.metadata
     )
@@ -346,7 +346,7 @@ defmodule PulsarEx.PartitionedProducer do
   def handle_call({:produce, payload, _}, _from, %{max_message_size: max_message_size} = state)
       when byte_size(payload) > max_message_size do
     :telemetry.execute(
-      [:pulsar_ex, :producer, :send, :error],
+      [:pulsar_ex, :producer, :send, :message_size_too_large],
       %{count: 1},
       state.metadata
     )
@@ -397,7 +397,7 @@ defmodule PulsarEx.PartitionedProducer do
       )
       when queue_size + 1 > max_queue_size do
     :telemetry.execute(
-      [:pulsar_ex, :producer, :send, :error],
+      [:pulsar_ex, :producer, :send, :overflow],
       %{count: 1},
       state.metadata
     )
@@ -447,7 +447,7 @@ defmodule PulsarEx.PartitionedProducer do
   def handle_cast({:produce, payload, _}, %{max_message_size: max_message_size} = state)
       when byte_size(payload) > max_message_size do
     :telemetry.execute(
-      [:pulsar_ex, :producer, :send, :error],
+      [:pulsar_ex, :producer, :send, :message_size_too_large],
       %{count: 1},
       state.metadata
     )
