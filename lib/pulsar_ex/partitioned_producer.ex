@@ -710,6 +710,12 @@ defmodule PulsarEx.PartitionedProducer do
     milli_ts = System.monotonic_time(:millisecond)
     ts = System.monotonic_time()
 
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :batch],
+      %{size: length(messages)},
+      state.metadata
+    )
+
     reply =
       Connection.send_messages(
         state.connection,
