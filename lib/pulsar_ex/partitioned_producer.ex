@@ -711,7 +711,7 @@ defmodule PulsarEx.PartitionedProducer do
     ts = System.monotonic_time()
 
     :telemetry.execute(
-      [:pulsar_ex, :producer, :batch],
+      [:pulsar_ex, :producer, :send, :batch],
       %{size: length(messages)},
       state.metadata
     )
