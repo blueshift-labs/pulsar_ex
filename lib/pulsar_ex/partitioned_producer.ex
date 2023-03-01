@@ -310,6 +310,22 @@ defmodule PulsarEx.PartitionedProducer do
 
   @impl true
   def handle_call(
+        {:produce, _, %{topic_name: msg_topic_name}},
+        _from,
+        %{topic_name: topic_name} = state
+      )
+      when msg_topic_name != topic_name do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send, :mismatch],
+      %{count: 1},
+      state.metadata
+    )
+
+    {:reply, {:error, :producer_mismatch}, state}
+  end
+
+  @impl true
+  def handle_call(
         {:produce, payload, %{deliver_at_time: nil} = message_opts},
         from,
         %{state: :connecting, batch_enabled: true} = state
@@ -408,6 +424,21 @@ defmodule PulsarEx.PartitionedProducer do
   @impl true
   def handle_cast({:produce, payload, message_opts}, state) when is_list(message_opts) do
     handle_cast({:produce, payload, map_message_opts(message_opts)}, state)
+  end
+
+  @impl true
+  def handle_cast(
+        {:produce, _, %{topic_name: msg_topic_name}},
+        %{topic_name: topic_name} = state
+      )
+      when msg_topic_name != topic_name do
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send, :mismatch],
+      %{count: 1},
+      state.metadata
+    )
+
+    {:noreply, state}
   end
 
   @impl true
@@ -817,6 +848,7 @@ defmodule PulsarEx.PartitionedProducer do
       end
 
     %{
+      topic_name: Keyword.get(message_opts, :topic_name),
       properties: Keyword.get(message_opts, :properties),
       partition_key: Keyword.get(message_opts, :partition_key),
       ordering_key: Keyword.get(message_opts, :ordering_key),

@@ -22,6 +22,8 @@ defmodule PulsarEx do
           |> Keyword.get(:partition_key)
           |> Partitioner.assign(partitions)
 
+        message_opts = Keyword.put(message_opts, :topic_name, topic_name)
+
         with {:ok, producer} <-
                ProducerManager.get_producer(cluster, topic_name, partition, producer_opts) do
           PartitionedProducer.produce(producer, payload, message_opts)
@@ -40,6 +42,8 @@ defmodule PulsarEx do
           message_opts
           |> Keyword.get(:partition_key)
           |> Partitioner.assign(partitions)
+
+        message_opts = Keyword.put(message_opts, :topic_name, topic_name)
 
         with {:ok, producer} <-
                ProducerManager.get_producer(cluster, topic_name, partition, producer_opts) do
