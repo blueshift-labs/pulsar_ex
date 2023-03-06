@@ -41,11 +41,6 @@ defmodule PulsarEx.Topic do
     end
   end
 
-  def to_name(%Topic{} = topic), do: topic |> to_uri() |> URI.to_string()
-
-  def to_logical_name(%Topic{} = topic),
-    do: to_name(%{topic | partition: nil})
-
   def to_uri(%Topic{persistent: true, partition: nil} = topic) do
     %URI{
       scheme: "persistent",
@@ -92,5 +87,11 @@ defmodule PulsarEx.Topic do
 
   def to_query(%Topic{persistent: false} = topic) do
     "non-persistent/#{topic.tenant}/#{topic.namespace}/#{topic.topic}-partition-#{topic.partition}"
+  end
+end
+
+defimpl String.Chars, for: PulsarEx.Topic do
+  def to_string(topic) do
+    PulsarEx.Topic.to_uri(topic) |> URI.to_string()
   end
 end

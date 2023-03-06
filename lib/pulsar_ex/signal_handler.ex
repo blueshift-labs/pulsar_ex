@@ -21,7 +21,7 @@ defmodule PulsarEx.SignalHandler do
   def init({timeout, _}), do: {:ok, timeout}
 
   def handle_event(:sigterm, timeout) do
-    Logger.debug("Application received TERM signal #{:sigterm}, shutting down...")
+    Logger.debug("Application received TERM signal #{:sigterm}, shutting down")
 
     PulsarEx.Application.shutdown!()
 
@@ -31,7 +31,7 @@ defmodule PulsarEx.SignalHandler do
   end
 
   def handle_event(signal, timeout) do
-    Logger.error("Application received unexpected signal #{inspect(signal)}, stopping...")
+    Logger.error("Application received unexpected signal #{inspect(signal)}, stopping")
 
     :init.stop()
     {:ok, timeout}

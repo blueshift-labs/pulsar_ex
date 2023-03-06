@@ -1,7 +1,7 @@
 defmodule PulsarEx.ConsumerCallback do
   alias PulsarEx.{Consumer, ConsumerMessage}
 
-  @callback handle_messages([%ConsumerMessage{}], %Consumer.State{}) :: [
+  @callback handle_messages([%ConsumerMessage{}], %Consumer{}) :: [
               :ok | {:ok, term()} | {:error, term()}
             ]
 end
@@ -29,21 +29,13 @@ defmodule PulsarEx.WorkerCallback do
 end
 
 defmodule PulsarEx.ProducerCallback do
-  alias PulsarEx.Proto.{MessageIdData}
+  alias PulsarEx.Proto.MessageIdData
 
   @callback produce(
-              cluster :: atom(),
+              cluster_name :: atom() | String.t(),
               topic_name :: String.t(),
               payload :: binary(),
               message_opts :: keyword(),
               producer_opts :: keyword()
             ) :: {:ok, MessageIdData.t()} | {:error, term()}
-
-  @callback async_produce(
-              cluster :: atom(),
-              topic_name :: String.t(),
-              payload :: binary(),
-              message_opts :: keyword(),
-              producer_opts :: keyword()
-            ) :: :ok | {:error, term()}
 end

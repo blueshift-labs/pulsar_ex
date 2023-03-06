@@ -1,38 +1,28 @@
 defmodule PulsarEx.ConnectionManager do
-  defmodule State do
-    @enforce_keys [
-      :cluster,
-      :cluster_opts,
-      :admin_port,
-      :health_check,
-      :num_connections
-    ]
+  use Connection
 
-    defstruct [
-      :cluster,
-      :cluster_opts,
-      :admin_port,
-      :health_check,
-      :num_connections
-    ]
-  end
-
-  use GenServer
-
-  alias PulsarEx.{Broker, Connection, ConnectionRegistry, Admin}
+  alias PulsarEx.{Cluster, Broker, Backoff, ConnectionRegistry, ConnectionSupervisor}
 
   require Logger
 
   @num_connections 1
-  @health_check_interval 5000
-  @connection_timeout 60_000
+  @max_attempts 3
+  @backoff_type :rand_exp
+  @backoff_min 500
+  @backoff_max 5000
+  @backoff Backoff.new(
+             backoff_type: @backoff_type,
+             backoff_min: @backoff_min,
+             backoff_max: @backoff_max
+           )
 
-  def connections(cluster), do: String.to_atom("PulsarEx.Connections.#{cluster}")
+  @timeout 30_000
 
-  def get_connection(cluster, %Broker{} = broker) do
-    with [] <- Registry.lookup(ConnectionRegistry, {cluster, broker}),
-         {:ok, pool} <- GenServer.call(name(cluster), {:create, broker}, @connection_timeout) do
-      {:ok, pool}
+  def get_connection(cluster_name, broker_url) do
+    with [] <- Registry.lookup(ConnectionRegistry, {cluster_name, broker_url}),
+         {:ok, connection} <-
+           GenServer.call(__MODULE__, {:create, cluster_name, broker_url}, @timeout) do
+      {:ok, connection}
     else
       [{pool, _}] ->
         {:ok, :poolboy.transaction(pool, & &1)}
@@ -42,100 +32,113 @@ defmodule PulsarEx.ConnectionManager do
     end
   end
 
-  def start_link(cluster_opts) do
-    cluster = Keyword.get(cluster_opts, :cluster, :default)
-    GenServer.start_link(__MODULE__, cluster_opts, name: name(cluster))
+  def child_spec(clusters) do
+    %{
+      id: __MODULE__,
+      type: :worker,
+      start: {__MODULE__, :start_link, [clusters]}
+    }
+  end
+
+  def start_link(clusters) do
+    Connection.start_link(__MODULE__, clusters, name: __MODULE__)
   end
 
   @impl true
-  def init(cluster_opts) do
-    cluster = Keyword.get(cluster_opts, :cluster, :default)
-    Logger.debug("Starting connection manager, on cluster #{cluster}")
+  def init(clusters) do
+    Logger.debug("Starting connection manager")
 
-    admin_port = Keyword.fetch!(cluster_opts, :admin_port)
-    health_check = Keyword.get(cluster_opts, :health_check, false)
-    num_connections = Keyword.get(cluster_opts, :num_connections, @num_connections)
+    Process.flag(:trap_exit, true)
 
-    {:ok,
-     %State{
-       cluster: cluster,
-       cluster_opts: cluster_opts,
-       admin_port: admin_port,
-       health_check: health_check,
-       num_connections: num_connections
-     }}
+    clusters = Enum.into(clusters, %{}, &{&1.cluster_name, &1})
+
+    {:connect, :init, %{clusters: clusters, attempts: 0, backoff: @backoff, error: nil}}
   end
 
   @impl true
-  def handle_call({:create, %Broker{} = broker}, _from, state) do
-    case start_connection(broker, state) do
-      {:ok, pool} ->
-        {:reply, {:ok, pool}, state}
+  def connect(_, %{attempts: @max_attempts, error: err} = state) do
+    {:stop, err, state}
+  end
 
-      err ->
+  def connect(_, %{clusters: clusters, attempts: attempts, backoff: backoff} = state) do
+    connected =
+      clusters
+      |> Enum.flat_map(fn {_, %Cluster{brokers: brokers, port: port} = cluster} ->
+        Enum.map(brokers, &{cluster, %Broker{host: &1, port: port}})
+      end)
+      |> Enum.reduce_while(:ok, fn {cluster, broker}, :ok ->
+        case start_connection(cluster, broker) do
+          {:ok, _connection} ->
+            {:cont, :ok}
+
+          {:error, err} ->
+            {:halt, {:error, err}}
+        end
+      end)
+
+    case connected do
+      :ok ->
+        {:ok, %{clusters: clusters, attempts: 0, backoff: @backoff, error: nil}}
+
+      {:error, _} = err ->
+        {wait, backoff} = Backoff.backoff(backoff)
+
+        {:backoff, wait, %{state | attempts: attempts + 1, backoff: backoff, error: err}}
+    end
+  end
+
+  @impl true
+  def handle_call({:create, cluster_name, broker_url}, _from, %{clusters: clusters} = state) do
+    with %Cluster{} = cluster <- Map.get(clusters, cluster_name),
+         {:ok, broker} <- Broker.parse(broker_url),
+         {:ok, connection} <- start_connection(cluster, broker) do
+      {:reply, {:ok, connection}, state}
+    else
+      nil ->
+        {:reply, {:error, :cluster_not_configured}, state}
+
+      {:error, _} = err ->
         {:reply, err, state}
     end
   end
 
   @impl true
-  def handle_info({:health_check, %Broker{} = broker, pool}, %{cluster: cluster} = state) do
-    case Admin.health_check(broker, state.admin_port) do
-      :ok ->
-        Logger.debug("Broker #{Broker.to_name(broker)} is healthy, on cluster #{cluster}")
+  def terminate(reason, state) do
+    case reason do
+      :shutdown ->
+        Logger.debug("Shutting down Connection Manager, #{inspect(reason)}")
 
-        Process.send_after(
-          self(),
-          {:health_check, broker, pool},
-          @health_check_interval + :rand.uniform(@health_check_interval)
-        )
+      :normal ->
+        Logger.debug("Shutting down Connection Manager, #{inspect(reason)}")
 
-      err ->
-        Logger.error(
-          "Broker #{Broker.to_name(broker)} is not healthy, on cluster #{cluster}, #{inspect(err)}, stopping..."
-        )
+      {:shutdown, _} ->
+        Logger.debug("Shutting down Connection Manager, #{inspect(reason)}")
 
-        DynamicSupervisor.terminate_child(connections(cluster), pool)
+      _ ->
+        Logger.error("Shutting down Connection Manager, #{inspect(reason)}")
     end
 
-    {:noreply, state}
+    state
   end
 
-  defp start_connection(%Broker{} = broker, %{cluster: cluster} = state) do
-    case Registry.lookup(ConnectionRegistry, {cluster, broker}) do
+  defp start_connection(%Cluster{} = cluster, %Broker{} = broker) do
+    case Registry.lookup(ConnectionRegistry, {to_string(cluster), to_string(broker)}) do
       [{pool, _}] ->
         {:ok, :poolboy.transaction(pool, & &1)}
 
       [] ->
-        Logger.debug(
-          "Starting connection to broker #{Broker.to_name(broker)}, on cluster #{cluster}"
-        )
-
-        case DynamicSupervisor.start_child(connections(cluster), pool_spec(broker, state)) do
+        case DynamicSupervisor.start_child(ConnectionSupervisor, pool_spec(cluster, broker)) do
           {:error, {:already_started, pool}} ->
-            Logger.debug(
-              "Connections already started to broker #{Broker.to_name(broker)}, on cluster #{cluster}"
-            )
-
-            {:ok, pool}
+            {:ok, :poolboy.transaction(pool, & &1)}
 
           {:ok, pool} ->
-            Logger.debug(
-              "Connections started to broker #{Broker.to_name(broker)}, on cluster #{cluster}"
-            )
-
-            if state.health_check do
-              Process.send_after(
-                self(),
-                {:health_check, broker, pool},
-                @health_check_interval + :rand.uniform(@health_check_interval)
-              )
-            end
-
-            {:ok, pool}
+            Logger.debug("Connections started to broker", cluster: cluster, broker: broker)
+            {:ok, :poolboy.transaction(pool, & &1)}
 
           {:error, err} ->
-            Logger.error(
-              "Error starting connection to broker #{Broker.to_name(broker)}, on cluster #{cluster}, #{inspect(err)}"
+            Logger.error("Error starting connection to broker, #{inspect(err)}",
+              cluster: cluster,
+              broker: broker
             )
 
             {:error, err}
@@ -143,29 +146,36 @@ defmodule PulsarEx.ConnectionManager do
     end
   end
 
-  defp pool_spec(%Broker{} = broker, %{cluster: cluster} = state) do
+  defp pool_spec(%Cluster{cluster_opts: cluster_opts} = cluster, %Broker{} = broker) do
+    {num_connections, cluster_opts} =
+      Keyword.pop(cluster_opts, :num_connections, @num_connections)
+
     {
-      {cluster, broker},
+      {to_string(cluster), to_string(broker)},
       {
         :poolboy,
         :start_link,
         [
           [
-            name: {:via, Registry, {ConnectionRegistry, {cluster, broker}}},
-            worker_module: Connection,
-            size: state.num_connections,
+            name:
+              {:via, Registry,
+               {ConnectionRegistry, {to_string(cluster), to_string(broker)}, cluster_opts}},
+            worker_module: connection_module(),
+            size: num_connections,
             max_overflow: 0,
             strategy: :fifo
           ],
-          {broker, state.cluster_opts}
+          {cluster, broker}
         ]
       },
       :permanent,
       :infinity,
       :supervisor,
-      [:poolboy, Connection]
+      [:poolboy, connection_module()]
     }
   end
 
-  defp name(cluster), do: String.to_atom("#{__MODULE__}.#{cluster}")
+  defp connection_module() do
+    Application.get_env(:pulsar_ex, :connection_module, PulsarEx.Connection)
+  end
 end
