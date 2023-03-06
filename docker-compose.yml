@@ -1,12 +1,232 @@
 version: '3'
+
 services:
+  influxdb:
+    image: "influxdb:latest"
+    container_name: influxdb
+    env_file:
+      - './support/influx.env'
+    ports:
+      - '8086:8086'
+    healthcheck:
+      test: ["CMD-SHELL", "curl --write-out \"%{http_code}\" --silent --output /dev/null http://localhost:8086 | grep 200"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  telegraf:
+    image: "telegraf:latest"
+    container_name: telegraf
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    env_file:
+      - './support/influx.env'
+    ports:
+      - '8125:8125/udp'
+    volumes:
+      - './support/telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro'
+
+  pulsar_manager:
+    image: "apachepulsar/pulsar-manager:v0.3.0"
+    container_name: pulsar_manager
+    depends_on:
+      bookie:
+        condition: service_started
+      broker1:
+        condition: service_healthy
+      broker2:
+        condition: service_healthy
+      broker3:
+        condition: service_healthy
+    ports:
+      - '9527:9527'
+      - '7750:7750'
+    environment:
+      - SPRING_CONFIGURATION_FILE=/pulsar-manager/pulsar-manager/application.properties
+    volumes:
+      - './support/pulsar-manager/entrypoint.sh:/bin/entrypoint.sh'
+    entrypoint: /bin/entrypoint.sh
+    healthcheck:
+      test: ["CMD-SHELL", "curl --write-out \"%{http_code}\" --silent --output /dev/null localhost:9527 | grep 200"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  zookeeper:
+    image: "apachepulsar/pulsar:latest"
+    container_name: zookeeper
+    restart: on-failure
+    environment:
+      - metadataStoreUrl=zk:zookeeper:2181
+    command: >
+      bash -c "bin/apply-config-from-env.py conf/zookeeper.conf && \
+             bin/generate-zookeeper-config.sh conf/zookeeper.conf && \
+             exec bin/pulsar zookeeper"
+    healthcheck:
+      test: ["CMD", "bin/pulsar-zookeeper-ruok.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  pulsar-init:
+    image: "apachepulsar/pulsar:latest"
+    container_name: pulsar-init
+    hostname: pulsar-init
+    command: >
+      bin/pulsar initialize-cluster-metadata \
+               --cluster dev \
+               --zookeeper zookeeper:2181 \
+               --configuration-store zookeeper:2181 \
+               --web-service-url http://localhost:8081 \
+               --broker-service-url pulsar://localhost:6651
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+
+  bookie:
+    image: "apachepulsar/pulsar:latest"
+    container_name: bookie
+    restart: on-failure
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    environment:
+      - clusterName=dev
+      - zkServers=zookeeper:2181
+      - metadataServiceUri=metadata-store:zk:zookeeper:2181
+    command: bash -c "bin/apply-config-from-env.py conf/bookkeeper.conf
+      && exec bin/pulsar bookie"
+
+  broker1:
+    image: "apachepulsar/pulsar:latest"
+    container_name: broker1
+    hostname: broker1
+    restart: on-failure
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      bookie:
+        condition: service_started
+    environment:
+      - brokerServicePort=6651
+      - webServicePort=8081
+      - metadataStoreUrl=zk:zookeeper:2181
+      - zookeeperServers=zookeeper:2181
+      - clusterName=dev
+      - managedLedgerDefaultEnsembleSize=1
+      - managedLedgerDefaultWriteQuorum=1
+      - managedLedgerDefaultAckQuorum=1
+      - advertisedAddress=broker1
+      - advertisedListeners=external:pulsar://broker1:6651
+    ports:
+      - "6651:6651"
+      - "8081:8081"
+    command: bash -c "bin/apply-config-from-env.py conf/broker.conf
+      &&  exec bin/pulsar broker"
+    healthcheck:
+      test: ["CMD-SHELL", "bin/pulsar-admin --admin-url http://localhost:8081 brokers healthcheck | grep ok"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+
+  broker2:
+    image: "apachepulsar/pulsar:latest"
+    container_name: broker2
+    hostname: broker2
+    restart: on-failure
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      bookie:
+        condition: service_started
+    environment:
+      - brokerServicePort=6652
+      - webServicePort=8082
+      - metadataStoreUrl=zk:zookeeper:2181
+      - zookeeperServers=zookeeper:2181
+      - clusterName=dev
+      - managedLedgerDefaultEnsembleSize=1
+      - managedLedgerDefaultWriteQuorum=1
+      - managedLedgerDefaultAckQuorum=1
+      - advertisedAddress=broker2
+      - advertisedListeners=external:pulsar://broker2:6652
+    ports:
+      - "6652:6652"
+      - "8082:8082"
+    command: bash -c "bin/apply-config-from-env.py conf/broker.conf
+      &&  exec bin/pulsar broker"
+    healthcheck:
+      test: ["CMD-SHELL", "bin/pulsar-admin --admin-url http://localhost:8082 brokers healthcheck | grep ok"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+
+  broker3:
+    image: "apachepulsar/pulsar:latest"
+    container_name: broker3
+    hostname: broker3
+    restart: on-failure
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      bookie:
+        condition: service_started
+    environment:
+      - brokerServicePort=6653
+      - webServicePort=8083
+      - metadataStoreUrl=zk:zookeeper:2181
+      - zookeeperServers=zookeeper:2181
+      - clusterName=dev
+      - managedLedgerDefaultEnsembleSize=1
+      - managedLedgerDefaultWriteQuorum=1
+      - managedLedgerDefaultAckQuorum=1
+      - advertisedAddress=broker3
+      - advertisedListeners=external:pulsar://broker3:6653
+    ports:
+      - "6653:6653"
+      - "8083:8083"
+    command: bash -c "bin/apply-config-from-env.py conf/broker.conf
+      &&  exec bin/pulsar broker"
+    healthcheck:
+      test: ["CMD-SHELL", "bin/pulsar-admin --admin-url http://localhost:8083 brokers healthcheck | grep ok"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+
   pulsar:
-    image: apachepulsar/pulsar:2.8.1
+    image: "apachepulsar/pulsar:latest"
     container_name: pulsar
     restart: always
     ports:
       - '6650:6650'
       - '8080:8080'
     environment:
-      - PULSAR_MEM=-Xms1g -Xmx1g -XX:MaxDirectMemorySize=1g
-    command: bin/pulsar standalone
+      - PULSAR_PREFIX_advertisedAddress=pulsar
+      - PULSAR_PREFIX_allowAutoSubscriptionCreation=true
+      - PULSAR_PREFIX_allowAutoTopicCreation=true
+      - PULSAR_PREFIX_allowAutoTopicCreationType=partitioned
+      - PULSAR_PREFIX_brokerDeleteInactiveTopicsEnabled=false
+      - PULSAR_PREFIX_maxMessageSize=52428800
+      - PULSAR_PREFIX_systemTopicEnabled=true
+      - PULSAR_PREFIX_topicLevelPoliciesEnabled=true
+      - PULSAR_PREFIX_acknowledgmentAtBatchIndexLevelEnabled=true
+      - PULSAR_PREFIX_maxUnackedMessagesPerConsumer=500000
+      - PULSAR_PREFIX_maxUnackedMessagesPerSubscription=5000000
+    command:
+      - "/bin/bash"
+      - "-c"
+      - "/pulsar/bin/apply-config-from-env.py /pulsar/conf/standalone.conf && /pulsar/bin/pulsar standalone"
+    healthcheck:
+      test: ["CMD-SHELL", "bin/pulsar-admin brokers healthcheck | grep ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

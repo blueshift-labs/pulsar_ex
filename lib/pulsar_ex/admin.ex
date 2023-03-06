@@ -1,31 +1,6 @@
 defmodule PulsarEx.Admin do
   alias PulsarEx.{Broker, Topic}
 
-  def health_check(%Broker{host: host}, admin_port) do
-    url = %URI{
-      scheme: "http",
-      host: host,
-      port: admin_port,
-      path: "/admin/v2/brokers/health"
-    }
-
-    with {:ok, 200, _, client_ref} <-
-           :hackney.get(URI.to_string(url), [], "", []),
-         {:ok, "ok"} <- :hackney.body(client_ref) do
-      :ok
-    else
-      {:ok, _, _, client_ref} ->
-        {:ok, body} = :hackney.body(client_ref)
-        {:error, body}
-
-      {:ok, body} ->
-        {:error, body}
-
-      err ->
-        err
-    end
-  end
-
   def lookup_topic_partitions(hosts, admin_port, %Topic{} = topic)
       when is_list(hosts) do
     hosts
@@ -49,7 +24,7 @@ defmodule PulsarEx.Admin do
     }
 
     with {:ok, 200, _, client_ref} <-
-           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true, force_redirect: true),
          {:ok, body} <- :hackney.body(client_ref),
          {:ok, %{"partitions" => partitions}} <- Jason.decode(body) do
       {:ok, partitions}
@@ -83,7 +58,7 @@ defmodule PulsarEx.Admin do
     }
 
     with {:ok, 200, _, client_ref} <-
-           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true, force_redirect: true),
          {:ok, body} <- :hackney.body(client_ref),
          {:ok, %{"brokerUrl" => broker_url}} <- Jason.decode(body),
          {:ok, broker} <- Broker.parse(broker_url) do
@@ -118,7 +93,7 @@ defmodule PulsarEx.Admin do
     }
 
     with {:ok, 200, _, client_ref} <-
-           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true, force_redirect: true),
          {:ok, body} <- :hackney.body(client_ref),
          {:ok, topics} <- Jason.decode(body) do
       {:ok, topics}
@@ -152,7 +127,7 @@ defmodule PulsarEx.Admin do
     }
 
     with {:ok, 200, _, client_ref} <-
-           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true, force_redirect: true),
          {:ok, body} <- :hackney.body(client_ref),
          {:ok, topics} <- Jason.decode(body) do
       {:ok, Enum.reject(topics, &String.contains?(&1, "-partition-"))}
@@ -186,7 +161,7 @@ defmodule PulsarEx.Admin do
     }
 
     with {:ok, 200, _, client_ref} <-
-           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true, force_redirect: true),
          {:ok, body} <- :hackney.body(client_ref),
          {:ok, tenants} <- Jason.decode(body) do
       {:ok, tenants}
@@ -220,7 +195,7 @@ defmodule PulsarEx.Admin do
     }
 
     with {:ok, 200, _, client_ref} <-
-           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true, force_redirect: true),
          {:ok, body} <- :hackney.body(client_ref),
          {:ok, namespaces} <- Jason.decode(body) do
       {:ok, namespaces}
@@ -306,7 +281,7 @@ defmodule PulsarEx.Admin do
             case Topic.parse(topic) do
               {:ok, %Topic{} = topic} ->
                 if Regex.match?(topic_regex, topic.topic) do
-                  {:cont, {:ok, [Topic.to_name(topic) | acc]}}
+                  {:cont, {:ok, [to_string(topic) | acc]}}
                 else
                   {:cont, {:ok, acc}}
                 end
@@ -337,7 +312,7 @@ defmodule PulsarEx.Admin do
             case Topic.parse(topic) do
               {:ok, %Topic{} = topic} ->
                 if topic_name == topic.topic do
-                  {:cont, {:ok, [Topic.to_name(topic) | acc]}}
+                  {:cont, {:ok, [to_string(topic) | acc]}}
                 else
                   {:cont, {:ok, acc}}
                 end
@@ -367,7 +342,7 @@ defmodule PulsarEx.Admin do
     }
 
     with {:ok, 200, _, client_ref} <-
-           :hackney.get(URI.to_string(url), [], "", follow_redirect: true),
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true, force_redirect: true),
          {:ok, body} <- :hackney.body(client_ref) do
       Jason.decode(body)
     else
@@ -403,7 +378,8 @@ defmodule PulsarEx.Admin do
 
     with {:ok, status, _, _} when status in [204, 409] <-
            :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], body,
-             follow_redirect: true
+             follow_redirect: true,
+             force_redirect: true
            ) do
       :ok
     else
@@ -441,7 +417,8 @@ defmodule PulsarEx.Admin do
 
     with {:ok, status, _, _} when status in [204, 409] <-
            :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], body,
-             follow_redirect: true
+             follow_redirect: true,
+             force_redirect: true
            ) do
       :ok
     else
@@ -477,7 +454,8 @@ defmodule PulsarEx.Admin do
 
     with {:ok, status, _, _} when status in [204, 409] <-
            :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], "",
-             follow_redirect: true
+             follow_redirect: true,
+             force_redirect: true
            ) do
       :ok
     else
@@ -519,7 +497,8 @@ defmodule PulsarEx.Admin do
              URI.to_string(url),
              [{"Content-Type", "application/json"}],
              "#{partitions}",
-             follow_redirect: true
+             follow_redirect: true,
+             force_redirect: true
            ) do
       :ok
     else

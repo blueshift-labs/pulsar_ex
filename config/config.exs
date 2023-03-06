@@ -1,97 +1,20 @@
 import Config
 
+config :logger, level: :debug
+
 config :logger, :console,
   format: "$time [$level] $message $metadata\n",
-  metadata: [:application, :module, :payload, :job]
-
-config :pulsar_ex,
-  shutdown_timeout: 5_000,
-  clusters: [
-    [
-      cluster: :dev,
-      brokers: ["localhost"],
-      admin_port: 8080,
-      num_executors: 5,
-      socket_opts: [],
-      connection_timeout: 5_000,
-      num_connections: 1,
-      health_check: false,
-      producer_opts: [
-        auto_start: false,
-        batch_enabled: false,
-        batch_size: 100,
-        flush_interval: 3000,
-        properties: [client: "pulsar_ex"],
-        refresh_interval: 1000,
-        num_producers: 1
-      ],
-      consumer_opts: [
-        auto_start: true,
-        properties: [client: "pulsar_ex"]
-      ],
-      producers: [
-        # [
-        #   topic: "persistent://public/default/test.json",
-        #   producer_access_mode: :shared,
-        #   properties: [test: true]
-        # ]
-      ],
-      consumers: [
-        # [
-        #   topic: "persistent://public/default/test.json",
-        #   subscription: "test",
-        #   module: PulsarEx.TestWorker,
-        #   properties: [test: false],
-        #   refresh_interval: 15_000,
-        #   num_consumers: 30,
-        #   module: PulsarEx.DefaultWorker
-        # ]
-      ],
-      auto_setup: true,
-      tenants: [],
-      namespaces: [],
-      topics: [],
-      partitioned_topics: []
-    ]
+  metadata: [
+    :application,
+    :module,
+    :cluster,
+    :broker,
+    :topic,
+    :producer_id,
+    :consumer_id
   ],
-  cluster: :default,
-  brokers: ["localhost"],
-  admin_port: 8080,
-  num_executors: 5,
-  socket_opts: [],
-  connection_timeout: 5_000,
-  num_connections: 1,
-  health_check: false,
-  producer_opts: [
-    auto_start: false,
-    batch_enabled: false,
-    batch_size: 100,
-    flush_interval: 3000,
-    properties: [client: "pulsar_ex"],
-    refresh_interval: 1000,
-    num_producers: 1
-  ],
-  consumer_opts: [
-    auto_start: true,
-    properties: [client: "pulsar_ex"]
-  ],
-  producers: [
-    # [
-    #   topic: "persistent://public/default/test.json",
-    #   producer_access_mode: :shared,
-    #   properties: [test: true]
-    # ]
-  ],
-  consumers: [
-    # [
-    #   topic: "persistent://public/default/test.json",
-    #   subscription: "test",
-    #   module: PulsarEx.TestWorker,
-    #   properties: [test: false],
-    #   refresh_interval: 15_000,
-    #   num_consumers: 30,
-    #   module: PulsarEx.DefaultWorker
-    # ]
+  compile_time_purge_matching: [
+    [application: :tzdata]
   ]
 
 import_config "#{Mix.env()}.exs"

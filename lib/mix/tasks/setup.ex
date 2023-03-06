@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.PulsarEx.Setup do
   use Mix.Task
 
+  alias PulsarEx.Cluster
+
   @shortdoc "Set up the pulsar cluster"
   def run(_) do
     Mix.Task.run("app.config")
@@ -12,14 +14,7 @@ defmodule Mix.Tasks.PulsarEx.Setup do
       {clusters, []} -> clusters
       {clusters, cluster} -> [cluster | clusters]
     end
-    |> Enum.map(fn cluster_opts ->
-      cluster = Keyword.get(cluster_opts, :cluster, :default)
-      cluster = String.to_atom("#{cluster}")
-
-      cluster_opts
-      |> Keyword.put(:cluster, cluster)
-      |> Keyword.put(:auto_setup, true)
-      |> PulsarEx.Cluster.setup!()
-    end)
+    |> Enum.map(&Cluster.from_cluster_opts/1)
+    |> Enum.each(&Cluster.setup!/1)
   end
 end

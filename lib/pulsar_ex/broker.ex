@@ -10,8 +10,10 @@ defmodule PulsarEx.Broker do
       _ -> {:error, :malformatted_broker_url}
     end
   end
+end
 
-  def to_name(%Broker{host: host, port: port}) do
-    "#{host}:#{port}"
+defimpl String.Chars, for: PulsarEx.Broker do
+  def to_string(%PulsarEx.Broker{host: host, port: port}) do
+    %URI{scheme: "pulsar", host: host, port: port} |> Kernel.to_string()
   end
 end
