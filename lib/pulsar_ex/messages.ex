@@ -1,16 +1,40 @@
-defmodule PulsarEx.ProducerMessage do
-  @enforce_keys [:payload]
+defmodule PulsarEx.Message do
+  @enforce_keys [
+    :topic,
+    :payload
+  ]
+
   defstruct [
-    :compression,
+    :topic,
+    :payload,
+    :properties,
+    :partition_key,
+    :ordering_key,
+    :event_time,
+    :deliver_at_time
+  ]
+end
+
+defmodule PulsarEx.ProducerMessage do
+  @enforce_keys [
     :producer_id,
-    :sequence_id,
     :producer_name,
+    :sequence_id,
+    :payload
+  ]
+
+  defstruct [
+    :topic,
+    :producer_id,
+    :producer_name,
+    :sequence_id,
+    :payload,
     :properties,
     :partition_key,
     :ordering_key,
     :event_time,
     :deliver_at_time,
-    :payload
+    :compression
   ]
 end
 
@@ -25,7 +49,9 @@ defmodule PulsarEx.ConsumerMessage do
     :publish_time,
     :payload
   ]
+
   defstruct [
+    :topic,
     :message_id,
     :batch_index,
     :batch_size,
@@ -33,11 +59,11 @@ defmodule PulsarEx.ConsumerMessage do
     :producer_name,
     :sequence_id,
     :publish_time,
+    :payload,
     :properties,
     :partition_key,
-    :event_time,
     :ordering_key,
-    :deliver_at_time,
-    :payload
+    :event_time,
+    :deliver_at_time
   ]
 end

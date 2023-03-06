@@ -1,134 +1,107 @@
 defmodule PulsarEx.PartitionManager do
-  defmodule State do
-    @enforce_keys [
-      :cluster,
-      :cluster_opts,
-      :brokers,
-      :admin_port
-    ]
-
-    defstruct [
-      :cluster,
-      :cluster_opts,
-      :brokers,
-      :admin_port
-    ]
-  end
-
   use GenServer
-  alias PulsarEx.{Topic, Admin}
+
+  alias PulsarEx.{Topic, Broker, Backoff, ConnectionManager, Connection}
 
   require Logger
 
-  @watch_interval 30_000
+  @partitions :pulsar_partitions
 
-  # this has to be larger than the hackney default timeouts
-  # https://github.com/benoitc/hackney/blob/master/doc/hackney.md#request-5
-  @timeout 10_000
+  @watch_interval 60_000
+
+  @timeout 5000
   @max_attempts 5
+  @backoff_type :rand_exp
+  @backoff_min 500
+  @backoff_max 5000
+  @backoff Backoff.new(
+             backoff_type: @backoff_type,
+             backoff_min: @backoff_min,
+             backoff_max: @backoff_max
+           )
 
-  def lookup(cluster, topic_name, state \\ %{error: nil, attempts: 0})
+  def lookup(cluster_name, topic_name, state \\ %{attempts: 0, backoff: @backoff, error: nil})
 
-  def lookup(_cluster, _topic_name, %{attempts: @max_attempts, error: err}), do: {:error, err}
+  def lookup(_cluster_name, _topic_name, %{attempts: @max_attempts, error: err}),
+    do: {:error, err}
 
-  def lookup(cluster, topic_name, %{attempts: 0}) do
-    do_lookup(cluster, topic_name)
-    |> case do
+  def lookup(cluster_name, topic_name, %{attempts: attempts, backoff: backoff}) do
+    case do_lookup(cluster_name, topic_name) do
       {:ok, {topic, partitions}} ->
         {:ok, {topic, partitions}}
 
       {:error, err} ->
         Logger.error(
-          "Error looking up topic #{topic_name}, on cluster #{cluster}, #{inspect(err)}"
+          "Error looking up partitions for topic [#{topic_name}], on cluster [#{cluster_name}], #{inspect(err)}"
         )
 
         :telemetry.execute(
-          [:pulsar_ex, :lookup, :error],
+          [:pulsar_ex, :partitions, :lookup, :error],
           %{count: 1},
-          %{cluster: cluster, topic: topic_name}
+          %{cluster: cluster_name, topic: topic_name}
         )
 
-        lookup(cluster, topic_name, %{attempts: 1, error: err})
+        {wait, backoff} = Backoff.backoff(backoff)
+        Process.sleep(wait)
+        lookup(cluster_name, topic_name, %{attempts: attempts + 1, backoff: backoff, error: err})
     end
   end
 
-  def lookup(cluster, topic_name, %{attempts: attempts}) do
-    Process.sleep(2 ** attempts * 500)
-
-    do_lookup(cluster, topic_name)
-    |> case do
-      {:ok, {topic, partitions}} ->
-        {:ok, {topic, partitions}}
-
-      {:error, err} ->
-        Logger.error(
-          "Error looking up topic #{topic_name}, on cluster #{cluster}, #{inspect(err)}"
-        )
-
-        :telemetry.execute(
-          [:pulsar_ex, :lookup, :error],
-          %{count: 1},
-          %{cluster: cluster, topic: topic_name}
-        )
-
-        lookup(cluster, topic_name, %{attempts: attempts + 1, error: err})
-    end
-  end
-
-  defp do_lookup(cluster, topic_name) do
-    case :ets.lookup(PulsarEx.Application.partitions_table(), {cluster, topic_name}) do
-      [{{^cluster, ^topic_name}, {topic, partitions}}] ->
+  defp do_lookup(cluster_name, topic_name) do
+    case :ets.lookup(@partitions, {cluster_name, topic_name}) do
+      [{{^cluster_name, ^topic_name}, {topic, partitions}}] ->
         {:ok, {topic, partitions}}
 
       [] ->
-        GenServer.call(name(cluster), {:lookup, topic_name}, @timeout)
+        deadline = System.monotonic_time(:millisecond) + @timeout
+        timeout = 2 * @timeout
+        GenServer.call(__MODULE__, {:lookup, {cluster_name, topic_name, deadline}}, timeout)
     end
   end
 
-  def start_link(cluster_opts) do
-    cluster = Keyword.get(cluster_opts, :cluster, :default)
-    GenServer.start_link(__MODULE__, cluster_opts, name: name(cluster))
+  def start_link(clusters) do
+    GenServer.start_link(__MODULE__, clusters, name: __MODULE__)
   end
 
-  def init(cluster_opts) do
-    cluster = Keyword.get(cluster_opts, :cluster, :default)
-    brokers = Keyword.fetch!(cluster_opts, :brokers)
-    admin_port = Keyword.fetch!(cluster_opts, :admin_port)
+  def init(clusters) do
+    Logger.debug("Starting partition manager")
 
-    {:ok,
-     %State{
-       cluster: cluster,
-       cluster_opts: cluster_opts,
-       brokers: brokers,
-       admin_port: admin_port
-     }}
+    :ets.new(@partitions, [
+      :named_table,
+      :set,
+      :public,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    {:ok, Enum.into(clusters, %{}, &{&1.cluster_name, &1})}
   end
 
   def handle_call(
-        {:lookup, topic_name},
+        {:lookup, {cluster_name, topic_name, deadline}},
         _from,
-        %{cluster: cluster} = state
+        state
       ) do
-    with [] <- :ets.lookup(PulsarEx.Application.partitions_table(), {cluster, topic_name}),
+    with %{brokers: brokers, port: port} <- Map.get(state, cluster_name),
+         [] <- :ets.lookup(@partitions, {cluster_name, topic_name}),
          {:ok, %Topic{} = topic} <- Topic.parse(topic_name),
-         {:ok, partitions} <-
-           Admin.lookup_topic_partitions(state.brokers, state.admin_port, topic) do
-      :ets.insert(
-        PulsarEx.Application.partitions_table(),
-        {{cluster, topic_name}, {topic, partitions}}
-      )
+         {:ok, partitions} <- internal_lookup(cluster_name, brokers, port, topic, deadline) do
+      :ets.insert(@partitions, {{cluster_name, topic_name}, {topic, partitions}})
 
       if partitions > 0 do
         Process.send_after(
           self(),
-          {:watch, topic_name, topic},
+          {:watch, {cluster_name, brokers, port, topic_name, topic}},
           @watch_interval + :rand.uniform(@watch_interval)
         )
       end
 
       {:reply, {:ok, {topic, partitions}}, state}
     else
-      [{{^cluster, ^topic_name}, {topic, partitions}}] ->
+      nil ->
+        {:reply, {:error, :cluster_not_configured}, state}
+
+      [{{^cluster_name, ^topic_name}, {topic, partitions}}] ->
         {:reply, {:ok, {topic, partitions}}, state}
 
       {:error, _} = err ->
@@ -136,31 +109,33 @@ defmodule PulsarEx.PartitionManager do
     end
   end
 
-  def handle_info(
-        {:watch, topic_name, topic},
-        state
-      ) do
-    case Admin.lookup_topic_partitions(state.brokers, state.admin_port, topic) do
+  def handle_info({:watch, {cluster_name, brokers, port, topic_name, topic}}, state) do
+    deadline = System.monotonic_time(:millisecond) + @timeout
+
+    case internal_lookup(cluster_name, brokers, port, topic, deadline) do
       {:ok, partitions} ->
-        :ets.insert(
-          PulsarEx.Application.partitions_table(),
-          {{state.cluster, topic_name}, {topic, partitions}}
-        )
+        :ets.insert(@partitions, {{cluster_name, topic_name}, {topic, partitions}})
 
       {:error, err} ->
         Logger.error(
-          "Error watching topic partitions for #{topic_name}, on cluster #{state.cluster}, #{inspect(err)}"
+          "Error watching partitions for topic [#{topic_name}], on cluster [#{cluster_name}], #{inspect(err)}"
         )
     end
 
     Process.send_after(
       self(),
-      {:watch, topic_name, topic},
+      {:watch, {cluster_name, brokers, port, topic_name, topic}},
       @watch_interval + :rand.uniform(@watch_interval)
     )
 
     {:noreply, state}
   end
 
-  defp name(cluster), do: String.to_atom("#{__MODULE__}.#{cluster}")
+  defp internal_lookup(cluster_name, brokers, port, topic, deadline) do
+    broker_url = %Broker{host: Enum.random(brokers), port: port} |> to_string()
+
+    with {:ok, conn} <- ConnectionManager.get_connection(cluster_name, broker_url) do
+      Connection.lookup_topic_partitions(conn, to_string(topic), deadline)
+    end
+  end
 end
