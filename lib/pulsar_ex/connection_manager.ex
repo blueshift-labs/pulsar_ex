@@ -66,14 +66,18 @@ defmodule PulsarEx.ConnectionManager do
       |> Enum.flat_map(fn {_, %Cluster{brokers: brokers, port: port} = cluster} ->
         Enum.map(brokers, &{cluster, %Broker{host: &1, port: port}})
       end)
-      |> Enum.reduce_while(:ok, fn {cluster, broker}, :ok ->
-        case start_connection(cluster, broker) do
-          {:ok, _connection} ->
-            {:cont, :ok}
+      |> Enum.reduce_while(:ok, fn
+        {%{auto_connect: false}, _}, :ok ->
+          {:cont, :ok}
 
-          {:error, err} ->
-            {:halt, {:error, err}}
-        end
+        {cluster, broker}, :ok ->
+          case start_connection(cluster, broker) do
+            {:ok, _connection} ->
+              {:cont, :ok}
+
+            {:error, err} ->
+              {:halt, {:error, err}}
+          end
       end)
 
     case connected do

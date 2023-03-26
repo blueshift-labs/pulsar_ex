@@ -3,6 +3,7 @@ defmodule PulsarEx.Cluster do
             brokers: ["localhost"],
             port: 6650,
             admin_port: 8080,
+            auto_connect: false,
             cluster_opts: []
 
   def from_cluster_opts(cluster_opts) do
