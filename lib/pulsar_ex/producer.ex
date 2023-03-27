@@ -139,7 +139,12 @@ defmodule PulsarEx.Producer do
 
   @impl true
   def init({%Cluster{cluster_opts: cluster_opts} = cluster, topic, producer_id, producer_opts}) do
-    Logger.metadata(cluster: cluster, broker: nil, topic: topic, producer_id: producer_id)
+    Logger.metadata(
+      cluster: "#{cluster}",
+      broker: nil,
+      topic: "#{topic}",
+      producer_id: producer_id
+    )
 
     Process.flag(:trap_exit, true)
 
@@ -250,7 +255,12 @@ defmodule PulsarEx.Producer do
           backoff: backoff
         } = state
       ) do
-    Logger.metadata(cluster: cluster, broker: broker_url, topic: topic, producer_id: producer_id)
+    Logger.metadata(
+      cluster: "#{cluster}",
+      broker: broker_url,
+      topic: "#{topic}",
+      producer_id: producer_id
+    )
 
     deadline = System.monotonic_time(:millisecond) + @lookup_timeout
 

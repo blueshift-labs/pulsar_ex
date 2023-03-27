@@ -170,9 +170,9 @@ defmodule PulsarEx.Consumer do
              %Topic{} = topic, consumer_id, subscription, consumer_opts}
           ) do
         Logger.metadata(
-          cluster: cluster,
+          cluster: "#{cluster}",
           broker: nil,
-          topic: topic,
+          topic: "#{topic}",
           consumer_id: consumer_id,
           subscription: subscription
         )
@@ -342,9 +342,9 @@ defmodule PulsarEx.Consumer do
             } = state
           ) do
         Logger.metadata(
-          cluster: cluster,
-          broker: broker_url,
-          topic: topic,
+          cluster: "#{cluster}",
+          broker: "#{broker_url}",
+          topic: "#{topic}",
           consumer_id: consumer_id,
           subscription: subscription
         )

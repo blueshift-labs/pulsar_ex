@@ -241,7 +241,7 @@ defmodule PulsarEx.Connection do
 
   @impl true
   def init({%Cluster{} = cluster, broker}) do
-    Logger.metadata(cluster: cluster, broker: broker)
+    Logger.metadata(cluster: "#{cluster}", broker: "#{broker}")
 
     Process.flag(:trap_exit, true)
 
