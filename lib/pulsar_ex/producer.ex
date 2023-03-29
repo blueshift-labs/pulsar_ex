@@ -917,6 +917,12 @@ defmodule PulsarEx.Producer do
         {[%{sequence_id: sequence_id} | _] = producer_messages, state} =
           produce_messages(messages, state)
 
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :request],
+          %{batch_size: length(messages)},
+          state
+        )
+
         case connection_module().send_messages(
                conn,
                producer_id,
@@ -959,6 +965,12 @@ defmodule PulsarEx.Producer do
           produce_messages(batch, state)
 
         {_, _, deadline} = Enum.min_by(batch, fn {_message, _from, deadline} -> deadline end)
+
+        :telemetry.execute(
+          [:pulsar_ex, :producer, :send, :request],
+          %{batch_size: length(batch)},
+          state
+        )
 
         case connection_module().send_messages(
                conn,
@@ -1005,6 +1017,12 @@ defmodule PulsarEx.Producer do
       produce_messages(batch, state)
 
     {_, _, deadline} = Enum.min_by(batch, fn {_message, _from, deadline} -> deadline end)
+
+    :telemetry.execute(
+      [:pulsar_ex, :producer, :send, :request],
+      %{batch_size: length(batch)},
+      state
+    )
 
     case connection_module().send_messages(
            conn,

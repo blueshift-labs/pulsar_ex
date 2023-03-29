@@ -201,6 +201,7 @@ defmodule PulsarEx.TestTelemetry do
         unit: {:native, :millisecond}
       ),
       sum("pulsar_ex.producer.exit.count"),
+      summary("pulsar_ex.producer.send.request.batch_size"),
       sum("pulsar_ex.producer.send.request.success.count"),
       sum("pulsar_ex.producer.send.request.error.count"),
       sum("pulsar_ex.producer.send.error.unknown.count"),
