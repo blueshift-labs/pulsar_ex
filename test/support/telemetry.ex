@@ -12,19 +12,24 @@ defmodule PulsarEx.TestTelemetry do
 
     children = [
       {TelemetryMetricsStatsd,
-       metrics: metrics(), formatter: :datadog, host: host, port: port, global_tags: global_tags()},
+       metrics: pulsar_metrics(),
+       formatter: :datadog,
+       host: host,
+       port: port,
+       global_tags: global_tags()},
       {:telemetry_poller, measurements: periodic_measurements(), period: 1000}
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
   end
 
-  def metrics do
-    connection_metrics() ++ producer_metrics() ++ consumer_metrics()
+  defp pulsar_metrics() do
+    connection_metrics() ++ producer_metrics() ++ consumer_metrics() ++ worker_metrics()
   end
 
   defp connection_metrics() do
     [
+      sum("pulsar_ex.partitions.lookup.error.count"),
       sum("pulsar_ex.connection.success.count"),
       sum("pulsar_ex.connection.error.count"),
       sum("pulsar_ex.connection.close_producer.request.success.count"),
@@ -59,51 +64,105 @@ defmodule PulsarEx.TestTelemetry do
       sum("pulsar_ex.connection.close_producer.received.count"),
       sum("pulsar_ex.connection.close_consumer.received.count"),
       sum("pulsar_ex.connection.producer_ready.received.count"),
-      summary("pulsar_ex.connection.producer_ready.received.duration"),
+      summary(
+        "pulsar_ex.connection.producer_ready.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.producer_ready.missing.count"),
       sum("pulsar_ex.connection.producer_not_ready.received.count"),
-      summary("pulsar_ex.connection.producer_not_ready.received.duration"),
+      summary(
+        "pulsar_ex.connection.producer_not_ready.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.producer_not_ready.missing.count"),
       sum("pulsar_ex.connection.consumer_ready.received.count"),
-      summary("pulsar_ex.connection.consumer_ready.received.duration"),
+      summary(
+        "pulsar_ex.connection.consumer_ready.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.close_producer.success.count"),
+      summary("pulsar_ex.connection.close_producer.success.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.close_consumer.success.count"),
+      summary("pulsar_ex.connection.close_consumer.success.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.command_success.missing.count"),
       sum("pulsar_ex.connection.create_producer.error.count"),
-      summary("pulsar_ex.connection.create_producer.error.duration"),
+      summary(
+        "pulsar_ex.connection.create_producer.error.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.subscribe.error.count"),
-      summary("pulsar_ex.connection.subscribe.error.duration"),
+      summary(
+        "pulsar_ex.connection.subscribe.error.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.close_producer.error.count"),
-      summary("pulsar_ex.connection.close_producer.error.duration"),
+      summary(
+        "pulsar_ex.connection.close_producer.error.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.close_consumer.error.count"),
-      summary("pulsar_ex.connection.close_consumer.error.duration"),
+      summary(
+        "pulsar_ex.connection.close_consumer.error.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.command_error.missing.count"),
       sum("pulsar_ex.connection.send_success.received.count"),
-      summary("pulsar_ex.connection.send_success.received.duration"),
+      summary(
+        "pulsar_ex.connection.send_success.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.send_success.missing.count"),
       sum("pulsar_ex.connection.send_error.received.count"),
-      summary("pulsar_ex.connection.send_error.received.duration"),
+      summary(
+        "pulsar_ex.connection.send_error.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.send_error.missing.count"),
       sum("pulsar_ex.connection.ack_success.received.count"),
-      summary("pulsar_ex.connection.ack_success.received.duration"),
+      summary(
+        "pulsar_ex.connection.ack_success.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.ack_success.missing.count"),
       sum("pulsar_ex.connection.ack_error.received.count"),
-      summary("pulsar_ex.connection.ack_error.received.duration"),
+      summary(
+        "pulsar_ex.connection.ack_error.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.ack_error.missing.count"),
       sum("pulsar_ex.connection.lookup_topic_partitions_success.received.count"),
-      summary("pulsar_ex.connection.lookup_topic_partitions_success.received.duration"),
+      summary(
+        "pulsar_ex.connection.lookup_topic_partitions_success.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.lookup_topic_partitions_success.missing.count"),
       sum("pulsar_ex.connection.lookup_topic_partitions_error.received.count"),
-      summary("pulsar_ex.connection.lookup_topic_partitions_error.received.duration"),
+      summary(
+        "pulsar_ex.connection.lookup_topic_partitions_error.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.lookup_topic_partitions_error.missing.count"),
       sum("pulsar_ex.connection.lookup_topic_connect.received.count"),
-      summary("pulsar_ex.connection.lookup_topic_connect.received.duration"),
+      summary(
+        "pulsar_ex.connection.lookup_topic_connect.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.lookup_topic_connect.missing.count"),
       sum("pulsar_ex.connection.lookup_topic_redirect.received.count"),
-      summary("pulsar_ex.connection.lookup_topic_redirect.received.duration"),
+      summary(
+        "pulsar_ex.connection.lookup_topic_redirect.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.lookup_topic_redirect.missing.count"),
       sum("pulsar_ex.connection.lookup_topic_error.received.count"),
-      summary("pulsar_ex.connection.lookup_topic_error.received.duration"),
+      summary(
+        "pulsar_ex.connection.lookup_topic_error.received.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.connection.lookup_topic_error.missing.count"),
       sum("pulsar_ex.connection.unknown_command.received.count")
     ]
@@ -116,6 +175,8 @@ defmodule PulsarEx.TestTelemetry do
 
   defp producer_metrics() do
     [
+      sum("pulsar_ex.produce.failed.count"),
+      sum("pulsar_ex.produce.retry.count"),
       sum("pulsar_ex.producer.max_attempts.count"),
       sum("pulsar_ex.producer.max_redirects.count"),
       sum("pulsar_ex.producer.lookup.success.count"),
@@ -129,10 +190,16 @@ defmodule PulsarEx.TestTelemetry do
       sum("pulsar_ex.producer.connection_down.count"),
       sum("pulsar_ex.producer.closed.count"),
       sum("pulsar_ex.producer.send.response.success.count"),
-      summary("pulsar_ex.producer.send.response.success.duration"),
+      summary(
+        "pulsar_ex.producer.send.response.success.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.producer.send.response.missing.count"),
       sum("pulsar_ex.producer.send.response.error.count"),
-      summary("pulsar_ex.producer.send.response.error.duration"),
+      summary(
+        "pulsar_ex.producer.send.response.error.duration",
+        unit: {:native, :millisecond}
+      ),
       sum("pulsar_ex.producer.exit.count"),
       sum("pulsar_ex.producer.send.request.success.count"),
       sum("pulsar_ex.producer.send.request.error.count"),
@@ -188,7 +255,23 @@ defmodule PulsarEx.TestTelemetry do
     |> Enum.map(fn metric ->
       metric
       |> Map.put(:tag_values, &pulsar_metadata/1)
-      |> Map.put(:tags, [:cluster, :broker, :topic, :subscription, :subscription_type])
+      |> Map.put(:tags, [:cluster, :broker, :topic, :subscription])
+    end)
+  end
+
+  defp worker_metrics() do
+    [
+      sum("pulsar_ex.worker.enqueue.success.count"),
+      summary("pulsar_ex.worker.enqueue.success.duration", unit: {:native, :millisecond}),
+      sum("pulsar_ex.worker.enqueue.error.count"),
+      sum("pulsar_ex.worker.handle_job.success.count"),
+      summary("pulsar_ex.worker.handle_job.success.duration", unit: {:native, :millisecond}),
+      sum("pulsar_ex.worker.handle_job.error.count")
+    ]
+    |> Enum.map(fn metric ->
+      metric
+      |> Map.put(:tag_values, &pulsar_metadata/1)
+      |> Map.put(:tags, [:cluster, :topic, :subscription, :job])
     end)
   end
 
@@ -200,7 +283,7 @@ defmodule PulsarEx.TestTelemetry do
     broker = Map.get(tags, :broker) || Map.get(tags, :broker_url)
 
     tags
-    |> Map.take([:cluster, :topic, :subscription, :subscription_type])
+    |> Map.take([:cluster, :topic, :subscription, :job])
     |> Map.put(:broker, broker)
     |> Enum.reject(&match?({_, nil}, &1))
     |> Enum.reduce(%{}, fn {k, v}, acc -> Map.put(acc, k, to_string(v)) end)

@@ -1359,7 +1359,7 @@ defmodule PulsarEx.Connection do
 
         :telemetry.execute(
           [:pulsar_ex, :connection, :close_producer, :success],
-          %{count: 1},
+          %{count: 1, duration: duration},
           state
         )
 
@@ -1375,7 +1375,7 @@ defmodule PulsarEx.Connection do
 
         :telemetry.execute(
           [:pulsar_ex, :connection, :close_consumer, :success],
-          %{count: 1},
+          %{count: 1, duration: duration},
           state
         )
 
