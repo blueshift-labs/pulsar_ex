@@ -5,15 +5,16 @@ defmodule PulsarEx.Worker do
     {cluster, opts} = Keyword.pop(opts, :cluster, "default")
     {jobs, opts} = Keyword.pop(opts, :jobs, [])
     {inline, opts} = Keyword.pop(opts, :inline, false)
+    {interceptors, opts} = Keyword.pop(opts, :interceptors, [])
     {middlewares, opts} = Keyword.pop(opts, :middlewares, [])
     {producer_opts, opts} = Keyword.pop(opts, :producer_opts, [])
 
-    {otp_app, cluster, jobs, inline, middlewares, producer_opts, opts}
+    {otp_app, cluster, jobs, inline, interceptors, middlewares, producer_opts, opts}
   end
 
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
-      {otp_app, cluster, jobs, inline, middlewares, producer_opts, opts} =
+      {otp_app, cluster, jobs, inline, interceptors, middlewares, producer_opts, opts} =
         PulsarEx.Worker.compile_config(__MODULE__, opts)
 
       require Logger
@@ -34,7 +35,7 @@ defmodule PulsarEx.Worker do
       use PulsarEx.Consumer, opts
       @behaviour PulsarEx.WorkerCallback
 
-      alias PulsarEx.{JobState, ConsumerMessage, Cluster, Topic}
+      alias PulsarEx.{JobInfo, JobState, ConsumerMessage, Cluster, Topic}
 
       @otp_app otp_app
       @cluster cluster
@@ -43,6 +44,7 @@ defmodule PulsarEx.Worker do
       @jobs jobs
       @inline inline
       @default_middlewares [PulsarEx.Middlewares.Telemetry, PulsarEx.Middlewares.Logging]
+      @interceptors interceptors
       @middlewares @default_middlewares ++ middlewares
       @producer_opts producer_opts
       @opts opts
@@ -255,73 +257,18 @@ defmodule PulsarEx.Worker do
         end
       end
 
-      # job, partition_key, ordering_key can be nil
-      defp do_enqueue_job(job, params, topic, cluster, partition_key, ordering_key, message_opts) do
-        cluster = if is_atom(cluster), do: cluster, else: String.to_atom(cluster)
-
-        metadata =
-          if job do
-            %{cluster: cluster, topic: topic, job: job}
-          else
-            %{cluster: cluster, topic: topic}
-          end
-
-        if @inline do
-          inline_process(job, params, topic, cluster, partition_key, ordering_key, message_opts)
-        else
-          start = System.monotonic_time()
-
-          properties =
-            Keyword.get(message_opts, :properties, [])
-            |> Enum.into(%{})
-
-          properties =
-            if job do
-              Map.put(properties, "job", job)
-            else
-              properties
-            end
-
-          message_opts =
-            Keyword.merge(message_opts,
-              properties: properties,
-              partition_key: partition_key,
-              ordering_key: ordering_key
-            )
-            |> Enum.reject(&match?({_, nil}, &1))
-
-          reply =
-            PulsarEx.Cluster.produce(
-              cluster,
-              topic,
-              Jason.encode!(params),
-              message_opts,
-              @producer_opts
-            )
-
-          case reply do
-            {:ok, _} ->
-              :telemetry.execute(
-                [:pulsar_ex, :worker, :enqueue, :success],
-                %{count: 1, duration: System.monotonic_time() - start},
-                metadata
-              )
-
-            {:error, _} ->
-              :telemetry.execute(
-                [:pulsar_ex, :worker, :enqueue, :error],
-                %{count: 1},
-                metadata
-              )
-          end
-
-          reply
-        end
-      end
-
-      defp inline_process(job, params, topic, cluster, partition_key, ordering_key, message_opts) do
-        params = Jason.decode!(Jason.encode!(params))
-
+      defp inline(
+             %JobInfo{
+               cluster: cluster,
+               worker: __MODULE__,
+               topic: topic,
+               job: job,
+               params: params,
+               partition_key: partition_key,
+               ordering_key: ordering_key,
+               message_opts: message_opts
+             } = job_info
+           ) do
         properties =
           message_opts
           |> Keyword.get(:properties, [])
@@ -330,7 +277,7 @@ defmodule PulsarEx.Worker do
 
         subscription = if @subscription, do: "#{@subscription}", else: nil
 
-        job_state =
+        %JobState{state: state} =
           job_handler().(%JobState{
             cluster: cluster,
             worker: __MODULE__,
@@ -351,10 +298,111 @@ defmodule PulsarEx.Worker do
             state: nil
           })
 
-        case job_state.state do
-          :ok -> {:ok, nil}
-          _ -> job_state.state
+        state =
+          case state do
+            :ok -> {:ok, nil}
+            _ -> state
+          end
+
+        %{job_info | state: state}
+      end
+
+      defp outline(
+             %JobInfo{
+               cluster: cluster,
+               topic: topic,
+               job: job,
+               params: params,
+               partition_key: partition_key,
+               ordering_key: ordering_key,
+               message_opts: message_opts
+             } = job_info
+           ) do
+        start = System.monotonic_time()
+
+        metadata =
+          if job do
+            %{cluster: cluster, topic: topic, job: job}
+          else
+            %{cluster: cluster, topic: topic}
+          end
+
+        properties =
+          Keyword.get(message_opts, :properties, [])
+          |> Enum.into(%{})
+
+        properties =
+          if job do
+            Map.put(properties, "job", job)
+          else
+            properties
+          end
+
+        message_opts =
+          Keyword.merge(message_opts,
+            properties: properties,
+            partition_key: partition_key,
+            ordering_key: ordering_key
+          )
+          |> Enum.reject(&match?({_, nil}, &1))
+
+        state =
+          PulsarEx.Cluster.produce(
+            cluster,
+            topic,
+            Jason.encode!(params),
+            message_opts,
+            @producer_opts
+          )
+
+        case state do
+          {:ok, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :worker, :enqueue, :success],
+              %{count: 1, duration: System.monotonic_time() - start},
+              metadata
+            )
+
+          {:error, _} ->
+            :telemetry.execute(
+              [:pulsar_ex, :worker, :enqueue, :error],
+              %{count: 1},
+              metadata
+            )
         end
+
+        %{job_info | state: state}
+      end
+
+      # job, partition_key, ordering_key can be nil
+      defp do_enqueue_job(job, params, topic, cluster, partition_key, ordering_key, message_opts) do
+        params = Jason.decode!(Jason.encode!(params))
+
+        handler = if @inline, do: &inline/1, else: &outline/1
+
+        handler =
+          @interceptors
+          |> Enum.reverse()
+          |> Enum.reduce(handler, fn interceptor, acc ->
+            interceptor.call(acc)
+          end)
+
+        %JobInfo{state: state} =
+          %JobInfo{
+            cluster: cluster,
+            worker: __MODULE__,
+            topic: topic,
+            job: job,
+            params: params,
+            partition_key: partition_key,
+            ordering_key: ordering_key,
+            message_opts: message_opts,
+            assigns: %{},
+            state: nil
+          }
+          |> handler.()
+
+        state
       end
 
       def start(opts \\ []) do
