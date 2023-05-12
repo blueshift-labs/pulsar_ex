@@ -20,6 +20,18 @@ defmodule PulsarEx.PartitionManager do
              backoff_max: @backoff_max
            )
 
+  def setup() do
+    unless Enum.member?(:ets.all(), @partitions) do
+      :ets.new(@partitions, [
+        :named_table,
+        :set,
+        :public,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
+    end
+  end
+
   def lookup(cluster_name, topic_name, state \\ %{attempts: 0, backoff: @backoff, error: nil})
 
   def lookup(_cluster_name, _topic_name, %{attempts: @max_attempts, error: err}),
@@ -65,14 +77,6 @@ defmodule PulsarEx.PartitionManager do
 
   def init(clusters) do
     Logger.debug("Starting partition manager")
-
-    :ets.new(@partitions, [
-      :named_table,
-      :set,
-      :public,
-      read_concurrency: true,
-      write_concurrency: true
-    ])
 
     {:ok, Enum.into(clusters, %{}, &{&1.cluster_name, &1})}
   end

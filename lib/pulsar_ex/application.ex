@@ -79,6 +79,8 @@ defmodule PulsarEx.Application do
 
     clusters |> Enum.each(&PulsarEx.Cluster.setup!/1)
 
+    PartitionManager.setup()
+
     clusters
   end
 
