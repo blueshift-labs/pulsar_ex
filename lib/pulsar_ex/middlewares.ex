@@ -49,8 +49,8 @@ end
 defimpl Jason.Encoder, for: PulsarEx.JobState do
   alias PulsarEx.JobState
 
-  @derivable ~w|worker topic subscription job properties publish_time event_time 
-    producer_name partition_key ordering_key deliver_at_time redelivery_count 
+  @derivable ~w|worker topic subscription job properties publish_time event_time
+    producer_name partition_key ordering_key deliver_at_time redelivery_count
     payload consumer_opts assigns state|a
 
   def encode(%JobState{consumer_opts: consumer_opts} = state, opts) do
@@ -85,7 +85,7 @@ defmodule PulsarEx.Middlewares.Logging do
         start = System.monotonic_time(:millisecond)
         Logger.info("start processing job, on cluster #{cluster}")
 
-        Logger.info("processing job with payload, on cluster #{cluster}",
+        Logger.debug("processing job with payload, on cluster #{cluster}",
           payload: job_state.payload
         )
 
@@ -117,7 +117,7 @@ defmodule PulsarEx.Middlewares.Logging do
         start = System.monotonic_time(:millisecond)
         Logger.info("start processing job #{job}, on cluster #{cluster}")
 
-        Logger.info("processing job #{job} with payload, on cluster #{cluster}",
+        Logger.debug("processing job #{job} with payload, on cluster #{cluster}",
           payload: job_state.payload
         )
 
