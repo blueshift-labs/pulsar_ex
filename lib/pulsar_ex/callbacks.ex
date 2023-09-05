@@ -4,6 +4,9 @@ defmodule PulsarEx.ConsumerCallback do
   @callback handle_messages([%ConsumerMessage{}], %Consumer{}) :: [
               :ok | {:ok, term()} | {:error, term()}
             ]
+
+  @callback send_to_dead_letter(%ConsumerMessage{}, %Consumer{}) ::
+              :ok | {:ok, term()} | {:error, term()}
 end
 
 defmodule PulsarEx.WorkerCallback do

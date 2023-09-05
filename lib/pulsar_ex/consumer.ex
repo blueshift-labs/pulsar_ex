@@ -113,6 +113,7 @@ defmodule PulsarEx.Consumer do
         ConnectionManager,
         Connection,
         Consumer,
+        ConsumerMessage,
         ConsumerCallback,
         ConsumerRegistry,
         ConsumerIDRegistry
@@ -787,20 +788,7 @@ defmodule PulsarEx.Consumer do
           | message_dead_lettered: message_dead_lettered + length(dead_letters)
         }
 
-        if dead_letter_topic != nil && dead_letters != [] do
-          Enum.each(dead_letters, fn %{payload: payload} = message ->
-            message_opts =
-              Map.take(message, [:properties, :partition_key, :ordering_key, :event_time])
-
-            PulsarEx.Cluster.produce(
-              cluster_name,
-              dead_letter_topic,
-              payload,
-              message_opts,
-              dead_letter_producer_opts
-            )
-          end)
-        end
+        Enum.each(dead_letters, &send_to_dead_letter(&1, state))
 
         state =
           Enum.reduce(dead_letters, state, fn message, acc ->
@@ -914,7 +902,32 @@ defmodule PulsarEx.Consumer do
 
       defoverridable handle_messages: 2
 
-      # ===================  private  ===================      
+      @impl ConsumerCallback
+      def send_to_dead_letter(_message, %{dead_letter_topic: nil}), do: :ok
+
+      def send_to_dead_letter(
+            %ConsumerMessage{payload: payload} = message,
+            %{
+              cluster: %Cluster{cluster_name: cluster_name},
+              dead_letter_topic: dead_letter_topic,
+              dead_letter_producer_opts: dead_letter_producer_opts
+            } = _state
+          ) do
+        message_opts =
+          Map.take(message, [:properties, :partition_key, :ordering_key, :event_time])
+
+        PulsarEx.Cluster.produce(
+          cluster_name,
+          dead_letter_topic,
+          payload,
+          message_opts,
+          dead_letter_producer_opts
+        )
+      end
+
+      defoverridable send_to_dead_letter: 2
+
+      # ===================  private  ===================
       defp handle_empty(%{batch: []} = state) do
         handle_flow_permits(state)
       end

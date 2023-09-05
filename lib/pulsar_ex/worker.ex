@@ -36,6 +36,7 @@ defmodule PulsarEx.Worker do
       @behaviour PulsarEx.WorkerCallback
 
       alias PulsarEx.{JobInfo, JobState, ConsumerMessage, Cluster, Topic}
+      alias PulsarEx.{ConsumerCallback, WorkerCallback}
 
       @otp_app otp_app
       @cluster cluster
@@ -87,7 +88,7 @@ defmodule PulsarEx.Worker do
         end)
       end
 
-      @impl true
+      @impl ConsumerCallback
       def handle_messages(
             [%ConsumerMessage{properties: properties} = message],
             %{
@@ -97,6 +98,7 @@ defmodule PulsarEx.Worker do
               consumer_opts: consumer_opts
             } = state
           ) do
+        {_worker, properties} = Map.pop(properties, "worker")
         {job, properties} = Map.pop(properties, "job")
         job = if job, do: String.to_atom(job), else: nil
         job = if job in @jobs, do: job, else: nil
@@ -130,26 +132,34 @@ defmodule PulsarEx.Worker do
         [job_state.state]
       end
 
-      @impl true
+      @impl ConsumerCallback
+      def send_to_dead_letter(
+            %ConsumerMessage{properties: properties} = message,
+            state
+          ) do
+        super(%{message | properties: Map.put_new(properties, "worker", __MODULE__)}, state)
+      end
+
+      @impl WorkerCallback
       def handle_job(_) do
         :ok
       end
 
       defoverridable handle_job: 1
 
-      @impl true
+      @impl WorkerCallback
       def handle_job(_, _) do
         :ok
       end
 
       defoverridable handle_job: 2
 
-      @impl true
+      @impl WorkerCallback
       def cluster(_, _), do: nil
 
       defoverridable cluster: 2
 
-      @impl true
+      @impl WorkerCallback
       def cluster(_, _, _), do: nil
 
       defoverridable cluster: 3
@@ -157,32 +167,32 @@ defmodule PulsarEx.Worker do
       defp assert_topic(nil), do: raise("topic undefined")
       defp assert_topic(topic), do: topic
 
-      @impl true
+      @impl WorkerCallback
       def topic(_, _), do: assert_topic(@topic)
 
       defoverridable topic: 2
 
-      @impl true
+      @impl WorkerCallback
       def topic(_, _, _), do: assert_topic(@topic)
 
       defoverridable topic: 3
 
-      @impl true
+      @impl WorkerCallback
       def partition_key(_, message_opts), do: Keyword.get(message_opts, :partition_key)
 
       defoverridable partition_key: 2
 
-      @impl true
+      @impl WorkerCallback
       def partition_key(_, _, message_opts), do: Keyword.get(message_opts, :partition_key)
 
       defoverridable partition_key: 3
 
-      @impl true
+      @impl WorkerCallback
       def ordering_key(_, message_opts), do: Keyword.get(message_opts, :ordering_key)
 
       defoverridable ordering_key: 2
 
-      @impl true
+      @impl WorkerCallback
       def ordering_key(_, _, message_opts), do: Keyword.get(message_opts, :ordering_key)
 
       defoverridable ordering_key: 3
@@ -310,6 +320,7 @@ defmodule PulsarEx.Worker do
       defp outline(
              %JobInfo{
                cluster: cluster,
+               worker: worker,
                topic: topic,
                job: job,
                params: params,
@@ -333,9 +344,9 @@ defmodule PulsarEx.Worker do
 
         properties =
           if job do
-            Map.put(properties, "job", job)
+            Map.merge(properties, %{"job" => job, "worker" => worker})
           else
-            properties
+            Map.put(properties, "worker", worker)
           end
 
         message_opts =
