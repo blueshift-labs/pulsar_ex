@@ -58,6 +58,10 @@ defmodule PulsarEx.Worker do
         @jobs
       end
 
+      def opts() do
+        @opts
+      end
+
       if @topic do
         def topic(), do: @topic
       else

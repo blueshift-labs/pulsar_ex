@@ -30,10 +30,10 @@ defmodule PulsarEx.Consumer do
     :batch,
     :acks,
     :pending_acks,
-    :message_received,
-    :message_acked,
-    :message_nacked,
-    :message_dead_lettered,
+    :messages_received,
+    :messages_acked,
+    :messages_nacked,
+    :messages_dead_lettered,
     :flow_permits_sent,
     :authoritative
   ]
@@ -69,10 +69,10 @@ defmodule PulsarEx.Consumer do
     :batch,
     :acks,
     :pending_acks,
-    :message_received,
-    :message_acked,
-    :message_nacked,
-    :message_dead_lettered,
+    :messages_received,
+    :messages_acked,
+    :messages_nacked,
+    :messages_dead_lettered,
     :flow_permits_sent,
     :authoritative,
     :broker_url,
@@ -96,6 +96,10 @@ defmodule PulsarEx.Consumer do
 
   def ack_response(consumer, response) do
     GenServer.cast(consumer, {:ack_response, response})
+  end
+
+  def messages_received(consumer, timeout) do
+    GenServer.call(consumer, :messages_received, timeout)
   end
 
   defmacro __using__(opts) do
@@ -156,6 +160,22 @@ defmodule PulsarEx.Consumer do
         consumer_id = App.get_consumer_id(cluster_name)
 
         GenServer.start_link(
+          __MODULE__,
+          {cluster, topic, consumer_id, subscription, consumer_opts},
+          name:
+            {:via, Registry,
+             {ConsumerIDRegistry, {cluster_name, consumer_id},
+              {cluster, topic, subscription, consumer_opts}}}
+        )
+      end
+
+      def start_nolink(
+            {%Cluster{cluster_name: cluster_name} = cluster, %Topic{} = topic, subscription,
+             consumer_opts}
+          ) do
+        consumer_id = App.get_consumer_id(cluster_name)
+
+        GenServer.start(
           __MODULE__,
           {cluster, topic, consumer_id, subscription, consumer_opts},
           name:
@@ -263,11 +283,11 @@ defmodule PulsarEx.Consumer do
           queue_size: 0,
           batch: [],
           acks: %{},
-          message_received: 0,
-          message_acked: 0,
-          message_nacked: 0,
+          messages_received: 0,
+          messages_acked: 0,
+          messages_nacked: 0,
           pending_acks: %{},
-          message_dead_lettered: 0,
+          messages_dead_lettered: 0,
           flow_permits_sent: 0,
           backoff: @backoff,
           attempts: 0,
@@ -544,7 +564,7 @@ defmodule PulsarEx.Consumer do
               ack_timeout: ack_timeout,
               acks: acks,
               ack_interval: ack_interval,
-              message_acked: message_acked
+              messages_acked: messages_acked
             } = state
           ) do
         :telemetry.execute(
@@ -625,7 +645,7 @@ defmodule PulsarEx.Consumer do
                    state
                    | acks: Enum.into(acks, %{}),
                      pending_acks: pending_acks,
-                     message_acked: message_acked + total_acks
+                     messages_acked: messages_acked + total_acks
                  }}
 
               {:error, err} ->
@@ -655,7 +675,7 @@ defmodule PulsarEx.Consumer do
               connection: conn,
               consumer_id: consumer_id,
               redelivery_interval: redelivery_interval,
-              message_nacked: message_nacked
+              messages_nacked: messages_nacked
             } = state
           ) do
         {available_nacks, acks} =
@@ -696,7 +716,7 @@ defmodule PulsarEx.Consumer do
                  %{
                    state
                    | acks: Enum.into(acks, %{}),
-                     message_nacked: message_nacked + total_nacks
+                     messages_nacked: messages_nacked + total_nacks
                  }}
 
               {:error, err} ->
@@ -730,6 +750,12 @@ defmodule PulsarEx.Consumer do
         {:stop, {:shutdown, :connection_down}, state}
       end
 
+      # ===================  handle_call  ===================
+      @impl true
+      def handle_call(:messages_received, _from, %{messages_received: messages_received} = state) do
+        {:reply, messages_received, state}
+      end
+
       # ===================  handle_cast  ===================
       @impl true
       def handle_cast(:close, state) do
@@ -753,9 +779,9 @@ defmodule PulsarEx.Consumer do
               queue_size: queue_size,
               batch_size: batch_size,
               permits: permits,
-              message_received: message_received,
+              messages_received: messages_received,
               max_redelivery_attempts: max_redelivery_attempts,
-              message_dead_lettered: message_dead_lettered,
+              messages_dead_lettered: messages_dead_lettered,
               dead_letter_topic: dead_letter_topic,
               dead_letter_producer_opts: dead_letter_producer_opts
             } = state
@@ -768,7 +794,7 @@ defmodule PulsarEx.Consumer do
           state
         )
 
-        state = %{state | message_received: message_received + length(messages)}
+        state = %{state | messages_received: messages_received + length(messages)}
 
         {dead_letters, messages} =
           Enum.split_with(messages, fn %{redelivery_count: redelivery_count} ->
@@ -785,7 +811,7 @@ defmodule PulsarEx.Consumer do
 
         state = %{
           state
-          | message_dead_lettered: message_dead_lettered + length(dead_letters)
+          | messages_dead_lettered: messages_dead_lettered + length(dead_letters)
         }
 
         Enum.each(dead_letters, &send_to_dead_letter(&1, state))

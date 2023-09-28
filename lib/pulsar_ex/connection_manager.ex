@@ -32,6 +32,10 @@ defmodule PulsarEx.ConnectionManager do
     end
   end
 
+  def get_cluster(cluster_name) do
+    GenServer.call(__MODULE__, {:cluster, cluster_name})
+  end
+
   def child_spec(clusters) do
     %{
       id: __MODULE__,
@@ -104,6 +108,10 @@ defmodule PulsarEx.ConnectionManager do
       {:error, _} = err ->
         {:reply, err, state}
     end
+  end
+
+  def handle_call({:cluster, cluster_name}, _from, %{clusters: clusters} = state) do
+    {:reply, Map.get(clusters, cluster_name), state}
   end
 
   @impl true
