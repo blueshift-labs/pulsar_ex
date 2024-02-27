@@ -759,7 +759,7 @@ defmodule PulsarEx.Consumer do
       # ===================  handle_cast  ===================
       @impl true
       def handle_cast(:close, state) do
-        Logger.warn("Received close command")
+        Logger.warning("Received close command")
 
         :telemetry.execute(
           [:pulsar_ex, :consumer, :closed],
@@ -895,7 +895,7 @@ defmodule PulsarEx.Consumer do
       end
 
       def terminate({:shutdown, err}, %{consumer_id: consumer_id, connection: conn} = state) do
-        Logger.warn("Stopping consumer, #{inspect(err)}")
+        Logger.warning("Stopping consumer, #{inspect(err)}")
 
         if conn do
           connection_module().close_consumer(conn, consumer_id)

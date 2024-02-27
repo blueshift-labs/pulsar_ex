@@ -589,7 +589,7 @@ defmodule PulsarEx.Producer do
   # ===================  handle_cast  ===================
   @impl true
   def handle_cast(:close, state) do
-    Logger.warn("Received close command")
+    Logger.warning("Received close command")
 
     :telemetry.execute(
       [:pulsar_ex, :producer, :closed],
@@ -606,7 +606,7 @@ defmodule PulsarEx.Producer do
       ) do
     case Map.pop(pending_sends, sequence_id) do
       {nil, _} ->
-        Logger.warn("Received unknown send response, messages might have timed out")
+        Logger.warning("Received unknown send response, messages might have timed out")
 
         :telemetry.execute(
           [:pulsar_ex, :producer, :send, :response, :missing],
@@ -697,7 +697,7 @@ defmodule PulsarEx.Producer do
   end
 
   def terminate({:shutdown, err}, %{producer_id: producer_id, connection: conn} = state) do
-    Logger.warn("Stopping producer, #{inspect(err)}")
+    Logger.warning("Stopping producer, #{inspect(err)}")
 
     flush_state(state, err)
 

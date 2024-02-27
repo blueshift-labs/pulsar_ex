@@ -988,7 +988,7 @@ defmodule PulsarEx.Connection do
   end
 
   def handle_info(:send_ping, %{socket: nil} = state) do
-    Logger.warn("Connection is not ready")
+    Logger.warning("Connection is not ready")
 
     Process.send_after(self(), :send_ping, @ping_interval)
     {:noreply, state}
@@ -1171,7 +1171,7 @@ defmodule PulsarEx.Connection do
          _,
          %{cluster: %Cluster{cluster_name: cluster_name}} = state
        ) do
-    Logger.warn(
+    Logger.warning(
       "Received CommandCloseProducer for producer [#{producer_id}] from broker, #{inspect(command)}"
     )
 
@@ -1193,7 +1193,7 @@ defmodule PulsarEx.Connection do
          _,
          %{cluster: %Cluster{cluster_name: cluster_name}} = state
        ) do
-    Logger.warn(
+    Logger.warning(
       "Received CloseConsumer for consumer [#{consumer_id}] from broker, #{inspect(command)}"
     )
 
@@ -1277,7 +1277,7 @@ defmodule PulsarEx.Connection do
       duration = System.monotonic_time() - send_ts
       duration_ms = div(duration, 1_000_000)
 
-      Logger.warn(
+      Logger.warning(
         "Producer [#{producer_id}] for topic [#{topic_name}] not ready on broker, after #{duration_ms}ms, #{inspect(response)}"
       )
 
@@ -1894,7 +1894,7 @@ defmodule PulsarEx.Connection do
   end
 
   defp handle_command(command, _payload, state) do
-    Logger.warn("Received UnknownCommand from broker, #{inspect(command)}")
+    Logger.warning("Received UnknownCommand from broker, #{inspect(command)}")
 
     :telemetry.execute(
       [:pulsar_ex, :connection, :unknown_command, :received],
