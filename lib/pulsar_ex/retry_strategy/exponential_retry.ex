@@ -49,7 +49,7 @@ defmodule PulsarEx.RetryStrategy.ExponentialRetry do
 
   def retry(err, options, %{attempts: attempts, backoff: backoff} = state)
       when err not in @client_errors do
-    Logger.warn("Error producing message, #{inspect(err)}", state)
+    Logger.warning("Error producing message, #{inspect(err)}", state)
 
     :telemetry.execute([:pulsar_ex, :produce, :retry], %{count: 1}, state)
 
