@@ -12,6 +12,7 @@ defmodule PulsarEx do
   }
 
   alias PulsarEx.RetryStrategy.ExponentialRetry
+  alias PulsarEx.Proto.MessageIdData
 
   defmodule ProducerImpl do
     @behaviour PulsarEx.ProducerCallback
@@ -113,6 +114,11 @@ defmodule PulsarEx do
     end
   end
 
+  @doc """
+  Publish a message to pulsar, create a pool of producers if not yet created
+  """
+  @spec produce(String.t(), binary(), keyword, keyword) ::
+          {:ok, %MessageIdData{}} | {:error, any()}
   def produce(topic_name, payload, message_opts \\ [], producer_opts \\ [])
 
   def produce(topic_name, payload, message_opts, producer_opts) do
@@ -120,12 +126,18 @@ defmodule PulsarEx do
     producer_module.produce("default", topic_name, payload, message_opts, producer_opts)
   end
 
+  @doc """
+  List all the consumers on default cluster
+  """
   def consumers() do
     Registry.select(ConsumerRegistry, [
       {{{:"$1", :"$2", :"$3"}, :"$4", :"$5"}, [], [{{:"$1", :"$2", :"$3", :"$4", :"$5"}}]}
     ])
   end
 
+  @doc """
+  List all the consumers for cluster
+  """
   def consumers(cluster_name) do
     Registry.select(ConsumerRegistry, [
       {{{cluster_name, :"$1", :"$2"}, :"$3", :"$4"}, [],
@@ -133,6 +145,9 @@ defmodule PulsarEx do
     ])
   end
 
+  @doc """
+  List all the consumers for cluster on a specific topic
+  """
   def consumers(cluster_name, topic_name) do
     Registry.select(ConsumerRegistry, [
       {{{cluster_name, topic_name, :"$1"}, :"$2", :"$3"}, [],
@@ -140,6 +155,9 @@ defmodule PulsarEx do
     ])
   end
 
+  @doc """
+  List all the consumers for cluster on a specific topic with specific subscription
+  """
   def consumers(cluster_name, topic_name, subscription) do
     Registry.select(ConsumerRegistry, [
       {{{cluster_name, topic_name, subscription}, :"$1", :"$2"}, [],
@@ -147,27 +165,52 @@ defmodule PulsarEx do
     ])
   end
 
-  def start_consumer(tenant, namespace, topic_name, subscription, module, opts) do
+  @type tenant :: String.t() | Regex.t()
+  @type namespace :: String.t() | Regex.t()
+  @type topic :: String.t() | Regex.t()
+  @type subscription :: String.t()
+
+  @doc """
+  Start consumers with topic pattern
+  """
+  @spec start_consumer(tenant(), namespace(), topic(), subscription(), module(), keyword()) ::
+          :ok | {:error, any()}
+  def start_consumer(tenant, namespace, topic, subscription, module, opts) do
     ConsumerManager.start_consumer(
       "default",
       tenant,
       namespace,
-      topic_name,
+      topic,
       subscription,
       module,
       opts
     )
   end
 
+  @type topic_name :: String.t()
+
+  @doc """
+  Start consumer from a fully quantified topic
+  """
+  @spec start_consumer(topic_name(), subscription(), module(), keyword()) ::
+          :ok | {:error, any()}
   def start_consumer(topic_name, subscription, module, opts) do
     ConsumerManager.start_consumer("default", topic_name, subscription, module, opts)
   end
 
-  def stop_consumer(tenant, namespace, topic_name, subscription) do
-    ConsumerManager.stop_consumer("default", tenant, namespace, topic_name, subscription)
+  @doc """
+  Stop consumers with topic pattern
+  """
+  @spec stop_consumer(tenant(), namespace(), topic(), subscription()) :: :ok
+  def stop_consumer(tenant, namespace, topic, subscription) do
+    ConsumerManager.stop_consumer("default", tenant, namespace, topic, subscription)
   end
 
-  def stop_consumer(topic_name, subscription) do
-    ConsumerManager.stop_consumer("default", topic_name, subscription)
+  @doc """
+  Stop consumers with fully quantified topic
+  """
+  @spec stop_consumer(topic(), subscription()) :: :ok
+  def stop_consumer(topic, subscription) do
+    ConsumerManager.stop_consumer("default", topic, subscription)
   end
 end

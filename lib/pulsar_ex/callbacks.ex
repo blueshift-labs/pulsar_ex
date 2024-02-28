@@ -40,5 +40,5 @@ defmodule PulsarEx.ProducerCallback do
               payload :: binary(),
               message_opts :: keyword(),
               producer_opts :: keyword()
-            ) :: {:ok, MessageIdData.t()} | {:error, term()}
+            ) :: {:ok, %MessageIdData{}} | {:error, term()}
 end

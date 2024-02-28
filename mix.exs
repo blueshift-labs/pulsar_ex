@@ -14,7 +14,11 @@ defmodule PulsarEx.MixProject do
       test_paths: test_paths(Mix.env()),
       aliases: aliases(),
       package: package(),
-      source_url: "https://github.com/blueshift-labs/pulsar_ex"
+      source_url: "https://github.com/blueshift-labs/pulsar_ex",
+      docs: [
+        main: "PulsarEx",
+        extras: ["README.md"]
+      ]
     ]
   end
 
