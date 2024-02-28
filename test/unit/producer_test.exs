@@ -200,7 +200,7 @@ defmodule PulsarEx.ProducerTest do
     @tag timeout: :infinity
     test "sends all messsage without surprises" do
       cluster_name = "unit"
-      topic_name = for _ <- 1..6, into: "", do: <<Enum.random('0123456789abcdef')>>
+      topic_name = for _ <- 1..6, into: "", do: <<Enum.random(~c"0123456789abcdef")>>
       topic_name = "persistent://pulsar_ex/ProducerTest/recovery-#{topic_name}"
 
       producer_opts = [
@@ -269,7 +269,7 @@ defmodule PulsarEx.ProducerTest do
     @tag timeout: :infinity
     test "sends all messsage when producer is closed" do
       cluster_name = "unit"
-      topic_name = for _ <- 1..6, into: "", do: <<Enum.random('0123456789abcdef')>>
+      topic_name = for _ <- 1..6, into: "", do: <<Enum.random(~c"0123456789abcdef")>>
       topic_name = "persistent://pulsar_ex/ProducerTest/recovery-#{topic_name}"
 
       producer_opts = [
@@ -356,7 +356,7 @@ defmodule PulsarEx.ProducerTest do
     @tag timeout: :infinity
     test "sends all messsage when error at sending" do
       cluster_name = "unit"
-      topic_name = for _ <- 1..6, into: "", do: <<Enum.random('0123456789abcdef')>>
+      topic_name = for _ <- 1..6, into: "", do: <<Enum.random(~c"0123456789abcdef")>>
       topic_name = "persistent://pulsar_ex/ProducerTest/recovery-#{topic_name}"
 
       producer_opts = [

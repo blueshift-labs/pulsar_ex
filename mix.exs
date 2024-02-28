@@ -3,17 +3,23 @@ defmodule PulsarEx.MixProject do
 
   def project do
     [
+      name: "PulsarEx",
       app: :pulsar_ex,
-      version: "0.12.8",
-      elixir: "~> 1.14",
+      version: "0.14.0",
+      elixir: "~> 1.15.7",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      description: description(),
       deps: deps(),
       test_paths: test_paths(Mix.env()),
       aliases: aliases(),
       package: package(),
-      description: "Elixir client for Apache Pulsar, wrapped around erlang client pulserl"
+      source_url: "https://github.com/blueshift-labs/pulsar_ex"
     ]
+  end
+
+  defp description() do
+    "A pulsar client implemented purely in Elixir"
   end
 
   defp aliases do
@@ -39,9 +45,10 @@ defmodule PulsarEx.MixProject do
 
   defp deps do
     [
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:telemetry, "~> 1.1"},
       {:telemetry_metrics, "~> 0.6", only: [:test, :integration]},
-      {:telemetry_metrics_statsd, "~> 0.6", only: [:test, :integration]},
+      {:telemetry_metrics_statsd, "~> 0.7", only: [:test, :integration]},
       {:telemetry_poller, "~> 1.0", only: [:test, :integration]},
       {:nimble_lz4, "~> 0.1.2", optional: true},
       {:hackney, "~> 1.18"},
@@ -56,7 +63,7 @@ defmodule PulsarEx.MixProject do
 
   defp package() do
     [
-      files: ~w(lib include .formatter.exs mix.exs README* LICENSE*),
+      files: ~w(lib .formatter.exs mix.exs README* LICENSE*),
       licenses: ~w(MIT),
       links: %{"GitHub" => "https://github.com/blueshift-labs/pulsar_ex"}
     ]
