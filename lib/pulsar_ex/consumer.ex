@@ -1128,7 +1128,7 @@ defmodule PulsarEx.Consumer do
         resend_ts =
           case redelivery_policy do
             :exp ->
-              System.monotonic_time(:millisecond) + 2 ** redelivery_count * redelivery_interval
+              System.monotonic_time(:millisecond) + 2 * redelivery_count * redelivery_interval
 
             _ ->
               System.monotonic_time(:millisecond) + redelivery_interval
