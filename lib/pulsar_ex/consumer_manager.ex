@@ -346,8 +346,10 @@ defmodule PulsarEx.ConsumerManager do
     consumers = Keyword.get(consumer_opts, :num_consumers, @num_consumers)
 
     children =
-      for _ <- 0..(consumers - 1) do
-        {module, {cluster, topic, subscription, consumer_opts}}
+      for n <- 0..(consumers - 1) do
+        Supervisor.child_spec({module, {cluster, topic, subscription, consumer_opts}},
+          id: {cluster_name, to_string(topic), subscription, n}
+        )
       end
 
     %{
