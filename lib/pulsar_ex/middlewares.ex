@@ -104,6 +104,12 @@ defmodule PulsarEx.Middlewares.Logging do
               "finished processing job with duration #{duration}ms, on cluster #{cluster}, #{inspect(result)}"
             )
 
+          {:non_retriable_error, err} ->
+            Logger.error(
+              "finished processing job with non-retriable error with duration #{duration}ms, on cluster #{cluster}, #{inspect(err)}",
+              payload: job_state.payload
+            )
+
           state ->
             Logger.error(
               "error processing job with duration #{duration}ms, on cluster #{cluster}, #{inspect(state)}",
@@ -134,6 +140,12 @@ defmodule PulsarEx.Middlewares.Logging do
           {:ok, result} ->
             Logger.info(
               "finished processing job #{job} with duration #{duration}ms, on cluster #{cluster}, #{inspect(result)}"
+            )
+
+          {:non_retriable_error, err} ->
+            Logger.error(
+              "finished processing job #{job} with non-retriable error with duration #{duration}ms, on cluster #{cluster}, #{inspect(err)}",
+              payload: job_state.payload
             )
 
           state ->
@@ -179,6 +191,13 @@ defmodule PulsarEx.Middlewares.Telemetry do
           :telemetry.execute(
             [:pulsar_ex, :worker, :handle_job, :success],
             %{count: 1, duration: System.monotonic_time() - start},
+            metadata
+          )
+
+        %JobState{state: {:non_retriable_error, _}} ->
+          :telemetry.execute(
+            [:pulsar_ex, :worker, :handle_job, :non_retriable_error],
+            %{count: 1},
             metadata
           )
 

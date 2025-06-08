@@ -964,16 +964,24 @@ defmodule PulsarEx.Consumer do
 
       defp handle_batch(batch, %{permits: permits} = state) do
         result =
-          try do
-            handle_messages(batch, state)
-          rescue
-            err ->
-              Logger.error(Exception.format(:error, err, __STACKTRACE__))
+          Enum.map(batch, fn message ->
+            try do
+              [result] = handle_messages([message], state)
+              result
+            rescue
+              err ->
+                Logger.error(Exception.format(:error, err, __STACKTRACE__))
 
-              Logger.error("Error handling batch of #{length(batch)} messages, #{inspect(err)}")
-
-              Enum.map(batch, fn _ -> {:error, err} end)
-          end
+                if non_retriable_error?(err) do
+                  Logger.error("Non-retriable error handling message, #{inspect(err)}")
+                  send_to_dead_letter(message, state)
+                  {:non_retriable_error, err}
+                else
+                  Logger.error("Error handling message, #{inspect(err)}")
+                  {:error, err}
+                end
+            end
+          end)
 
         state =
           Enum.zip(batch, result)
@@ -982,6 +990,9 @@ defmodule PulsarEx.Consumer do
               track_ack(message, acc)
 
             {message, {:ok, _}}, acc ->
+              track_ack(message, acc)
+
+            {message, {:non_retriable_error, _}}, acc ->
               track_ack(message, acc)
 
             {message, _}, acc ->
@@ -1137,6 +1148,24 @@ defmodule PulsarEx.Consumer do
         key = {ledger_id, entry_id}
         acks = Map.put(acks, key, {false, resend_ts, batch_size})
         %{state | acks: acks}
+      end
+
+      defp non_retriable_error?(err) do
+        err.__struct__ in [
+          FunctionClauseError,
+          UndefinedFunctionError,
+          ArgumentError,
+          BadArityError,
+          BadFunctionError,
+          BadStructError,
+          CaseClauseError,
+          CondClauseError,
+          TryClauseError,
+          MatchError,
+          BadMapError,
+          KeyError,
+          Enum.EmptyError
+        ]
       end
 
       defp connection_module() do
