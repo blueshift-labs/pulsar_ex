@@ -1160,11 +1160,7 @@ defmodule PulsarEx.Consumer do
           BadStructError,
           CaseClauseError,
           CondClauseError,
-          TryClauseError,
-          MatchError,
-          BadMapError,
-          KeyError,
-          Enum.EmptyError
+          TryClauseError
         ]
       end
 
