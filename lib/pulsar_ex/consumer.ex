@@ -803,12 +803,6 @@ defmodule PulsarEx.Consumer do
 
         Logger.debug("Received #{length(dead_letters)} dead letter messages")
 
-        :telemetry.execute(
-          [:pulsar_ex, :consumer, :received, :dead_letters],
-          %{count: length(dead_letters)},
-          state
-        )
-
         state = %{
           state
           | messages_dead_lettered: messages_dead_lettered + length(dead_letters)
@@ -937,8 +931,14 @@ defmodule PulsarEx.Consumer do
               cluster: %Cluster{cluster_name: cluster_name},
               dead_letter_topic: dead_letter_topic,
               dead_letter_producer_opts: dead_letter_producer_opts
-            } = _state
+            } = state
           ) do
+        :telemetry.execute(
+          [:pulsar_ex, :consumer, :received, :dead_letters],
+          %{count: 1},
+          state
+        )
+
         message_opts =
           Map.take(message, [:properties, :partition_key, :ordering_key, :event_time])
 
@@ -982,6 +982,10 @@ defmodule PulsarEx.Consumer do
               track_ack(message, acc)
 
             {message, {:ok, _}}, acc ->
+              track_ack(message, acc)
+
+            {message, {:non_retriable_error, _}}, acc ->
+              send_to_dead_letter(message, acc)
               track_ack(message, acc)
 
             {message, _}, acc ->
