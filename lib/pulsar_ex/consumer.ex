@@ -120,7 +120,8 @@ defmodule PulsarEx.Consumer do
         ConsumerMessage,
         ConsumerCallback,
         ConsumerRegistry,
-        ConsumerIDRegistry
+        ConsumerIDRegistry,
+        ConsumerReadyRegistry
       }
 
       require Logger
@@ -476,6 +477,12 @@ defmodule PulsarEx.Consumer do
           )
 
           ref = Process.monitor(conn)
+
+          Registry.register(
+            ConsumerReadyRegistry,
+            {cluster_name, topic.tenant, topic.namespace, subscription},
+            nil
+          )
 
           {:noreply,
            %{

@@ -7,8 +7,6 @@ defmodule PulsarEx.PartitionManager do
 
   @partitions :pulsar_partitions
 
-  @watch_interval 60_000
-
   @timeout 5000
   @max_attempts 5
   @backoff_type :rand_exp
@@ -93,10 +91,12 @@ defmodule PulsarEx.PartitionManager do
       :ets.insert(@partitions, {{cluster_name, topic_name}, {topic, partitions}})
 
       if partitions > 0 do
+        watch_interval = watch_interval()
+
         Process.send_after(
           self(),
           {:watch, {cluster_name, brokers, port, topic_name, topic}},
-          @watch_interval + :rand.uniform(@watch_interval)
+          watch_interval + :rand.uniform(watch_interval)
         )
       end
 
@@ -126,13 +126,19 @@ defmodule PulsarEx.PartitionManager do
         )
     end
 
+    watch_interval = watch_interval()
+
     Process.send_after(
       self(),
       {:watch, {cluster_name, brokers, port, topic_name, topic}},
-      @watch_interval + :rand.uniform(@watch_interval)
+      watch_interval + :rand.uniform(watch_interval)
     )
 
     {:noreply, state}
+  end
+
+  defp watch_interval() do
+    Application.get_env(:pulsar_ex, :partition_watch_interval, 60_000)
   end
 
   defp internal_lookup(cluster_name, brokers, port, topic, deadline) do

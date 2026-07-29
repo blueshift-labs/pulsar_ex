@@ -8,6 +8,8 @@ defmodule PulsarEx do
     Producer,
     RetryStrategy,
     ConsumerRegistry,
+    ConsumerIDRegistry,
+    ConsumerReadyRegistry,
     ConsumerManager
   }
 
@@ -163,6 +165,40 @@ defmodule PulsarEx do
       {{{cluster_name, topic_name, subscription}, :"$1", :"$2"}, [],
        [{{cluster_name, topic_name, subscription, :"$1", :"$2"}}]}
     ])
+  end
+
+  @doc """
+  Count active (started) consumers for cluster/tenant/namespace/subscription, cheaply -
+  a single Registry scan, no per-consumer calls
+  """
+  def active_consumers(cluster_name, tenant, namespace, subscription) do
+    Registry.select(ConsumerIDRegistry, [
+      {{{cluster_name, :_}, :_, :"$1"}, [], [:"$1"]}
+    ])
+    |> Enum.count(fn {_cluster, topic, sub, _consumer_opts} ->
+      sub == subscription and topic.tenant == tenant and topic.namespace == namespace
+    end)
+  end
+
+  @doc """
+  Count consumers that have reached the :READY state for cluster/tenant/namespace/subscription
+  """
+  def ready_consumers(cluster_name, tenant, namespace, subscription) do
+    ConsumerReadyRegistry
+    |> Registry.lookup({cluster_name, tenant, namespace, subscription})
+    |> length()
+  end
+
+  @doc """
+  Desired, active, and ready consumer counts for cluster/tenant/namespace/subscription -
+  desired comes from the consumer manager, active/ready from local registries
+  """
+  def consumer_gauges(cluster_name, tenant, namespace, subscription) do
+    %{
+      desired: ConsumerManager.desired_consumers(cluster_name, tenant, namespace, subscription),
+      active: active_consumers(cluster_name, tenant, namespace, subscription),
+      ready: ready_consumers(cluster_name, tenant, namespace, subscription)
+    }
   end
 
   @type tenant :: String.t() | Regex.t()

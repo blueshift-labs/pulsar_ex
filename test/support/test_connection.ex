@@ -168,7 +168,7 @@ defmodule PulsarEx.TestConnection do
 
   def handle_call(
         {:subscribe, consumer_id, topic_name, _subscription, _sub_type, consumer_opts, _deadline},
-        _from,
+        from,
         %{consumers: consumers, consumer_messages: consumer_messages} = state
       ) do
     notify = Keyword.fetch!(consumer_opts, :notify)
@@ -210,7 +210,16 @@ defmodule PulsarEx.TestConnection do
       properties: %{}
     }
 
-    {:reply, {:ok, reply}, %{state | consumers: consumers, consumer_messages: consumer_messages}}
+    state = %{state | consumers: consumers, consumer_messages: consumer_messages}
+
+    case Keyword.get(consumer_opts, :connect_delay, 0) do
+      delay when delay > 0 ->
+        Process.send_after(self(), {:subscribe_reply, from, {:ok, reply}}, delay)
+        {:noreply, state}
+
+      _ ->
+        {:reply, {:ok, reply}, state}
+    end
   end
 
   def handle_call(
@@ -302,6 +311,11 @@ defmodule PulsarEx.TestConnection do
   end
 
   @impl true
+  def handle_info({:subscribe_reply, from, reply}, state) do
+    GenServer.reply(from, reply)
+    {:noreply, state}
+  end
+
   def handle_info({:send_response, {pid, _}, sequence_id}, state) do
     Producer.send_response(
       pid,

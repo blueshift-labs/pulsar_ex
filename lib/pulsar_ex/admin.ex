@@ -376,11 +376,12 @@ defmodule PulsarEx.Admin do
 
     body = Jason.encode!(%{"allowedClusters" => clusters})
 
-    with {:ok, status, _, _} when status in [204, 409] <-
+    with {:ok, status, _, client_ref} when status in [204, 409] <-
            :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], body,
              follow_redirect: true,
              force_redirect: true
            ) do
+      {:ok, _} = :hackney.body(client_ref)
       :ok
     else
       {:ok, _, _, client_ref} ->
@@ -415,11 +416,12 @@ defmodule PulsarEx.Admin do
 
     body = Jason.encode!(policies)
 
-    with {:ok, status, _, _} when status in [204, 409] <-
+    with {:ok, status, _, client_ref} when status in [204, 409] <-
            :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], body,
              follow_redirect: true,
              force_redirect: true
            ) do
+      {:ok, _} = :hackney.body(client_ref)
       :ok
     else
       {:ok, _, _, client_ref} ->
@@ -452,11 +454,12 @@ defmodule PulsarEx.Admin do
       path: "/admin/v2/#{topic}"
     }
 
-    with {:ok, status, _, _} when status in [204, 409] <-
+    with {:ok, status, _, client_ref} when status in [204, 409] <-
            :hackney.put(URI.to_string(url), [{"Content-Type", "application/json"}], "",
              follow_redirect: true,
              force_redirect: true
            ) do
+      {:ok, _} = :hackney.body(client_ref)
       :ok
     else
       {:ok, _, _, client_ref} ->
@@ -492,7 +495,7 @@ defmodule PulsarEx.Admin do
       path: "/admin/v2/#{topic}/partitions"
     }
 
-    with {:ok, status, _, _} when status in [204, 409] <-
+    with {:ok, status, _, client_ref} when status in [204, 409] <-
            :hackney.put(
              URI.to_string(url),
              [{"Content-Type", "application/json"}],
@@ -500,6 +503,7 @@ defmodule PulsarEx.Admin do
              follow_redirect: true,
              force_redirect: true
            ) do
+      {:ok, _} = :hackney.body(client_ref)
       :ok
     else
       {:ok, _, _, client_ref} ->
@@ -521,5 +525,150 @@ defmodule PulsarEx.Admin do
         {:error, err} -> {:cont, {:error, err}}
       end
     end)
+  end
+
+  def update_partitioned_topic(hosts, admin_port, topic, partitions)
+
+  def update_partitioned_topic(host, admin_port, topic, partitions)
+      when is_binary(host) do
+    topic = String.replace(topic, "://", "/")
+
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/#{topic}/partitions"
+    }
+
+    with {:ok, 204, _, client_ref} <-
+           :hackney.post(
+             URI.to_string(url),
+             [{"Content-Type", "application/json"}],
+             "#{partitions}",
+             follow_redirect: true,
+             force_redirect: true
+           ) do
+      {:ok, _} = :hackney.body(client_ref)
+      :ok
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  def update_partitioned_topic(hosts, admin_port, topic, partitions)
+      when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case update_partitioned_topic(host, admin_port, topic, partitions) do
+        :ok -> {:halt, :ok}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  def delete_partitioned_topic(hosts, admin_port, topic, force \\ false)
+
+  def delete_partitioned_topic(host, admin_port, topic, force)
+      when is_binary(host) do
+    topic = String.replace(topic, "://", "/")
+
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/#{topic}/partitions",
+      query: "force=#{force}"
+    }
+
+    with {:ok, status, _, client_ref} when status in [204, 404] <-
+           :hackney.delete(URI.to_string(url), [], "",
+             follow_redirect: true,
+             force_redirect: true
+           ) do
+      {:ok, _} = :hackney.body(client_ref)
+      :ok
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  def delete_partitioned_topic(hosts, admin_port, topic, force)
+      when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case delete_partitioned_topic(host, admin_port, topic, force) do
+        :ok -> {:halt, :ok}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  def partitioned_topic_stats(host, admin_port, topic) when is_binary(host) do
+    topic = String.replace(topic, "://", "/")
+
+    url = %URI{
+      scheme: "http",
+      host: host,
+      port: admin_port,
+      path: "/admin/v2/#{topic}/partitioned-stats"
+    }
+
+    with {:ok, 200, _, client_ref} <-
+           :hackney.get(URI.to_string(url), [], "", follow_redirect: true, force_redirect: true),
+         {:ok, body} <- :hackney.body(client_ref),
+         {:ok, stats} <- Jason.decode(body) do
+      {:ok, parse_partitioned_topic_stats(stats)}
+    else
+      {:ok, _, _, client_ref} ->
+        {:ok, body} = :hackney.body(client_ref)
+        {:error, body}
+
+      err ->
+        err
+    end
+  end
+
+  def partitioned_topic_stats(hosts, admin_port, topic) when is_list(hosts) do
+    hosts
+    |> Enum.shuffle()
+    |> Enum.reduce_while({:error, :no_brokers_available}, fn host, _ ->
+      case partitioned_topic_stats(host, admin_port, topic) do
+        {:ok, stats} -> {:halt, {:ok, stats}}
+        {:error, err} -> {:cont, {:error, err}}
+      end
+    end)
+  end
+
+  defp parse_partitioned_topic_stats(stats) do
+    subscriptions = Map.get(stats, "subscriptions", %{})
+
+    unacked_by_subscription =
+      Map.new(subscriptions, fn {name, sub_stats} ->
+        {name, Map.get(sub_stats, "unackedMessages", 0)}
+      end)
+
+    msg_backlog =
+      Enum.reduce(subscriptions, 0, fn {_name, sub_stats}, acc ->
+        acc + Map.get(sub_stats, "msgBacklog", 0)
+      end)
+
+    %{
+      msg_rate_in: Map.get(stats, "msgRateIn", 0.0),
+      msg_rate_out: Map.get(stats, "msgRateOut", 0.0),
+      msg_backlog: msg_backlog,
+      unacked_by_subscription: unacked_by_subscription
+    }
   end
 end
