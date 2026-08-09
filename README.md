@@ -356,7 +356,7 @@ defmodule MyWorker do
 end
 ```
 
-#### Finally, testing
+#### Testing workers in applications
 How to write tests that involves enqueue/consumer logic?
 
 In your config/test.exs, you can do
@@ -393,3 +393,32 @@ defmodule MyWorkerTest do
   end
 end
 ```
+
+## Development and testing
+
+Install the Elixir and Erlang versions from `.tool-versions`, along with Docker and Docker Compose. Fetch dependencies before running the tests:
+
+```bash
+mix deps.get
+```
+
+The test suites use separate Mix environments:
+
+```bash
+# Unit tests; does not require Pulsar
+mix test
+
+# Start the Pulsar service required by integration and load tests
+docker compose up -d --wait pulsar
+
+# Integration tests
+MIX_ENV=integration mix test
+
+# Load, soak, and recovery tests
+MIX_ENV=load mix test
+
+# Stop the Pulsar service when finished
+docker compose down
+```
+
+Integration and load tests can take several minutes. The load suite includes a broker restart test that stops and starts the `pulsar` container, and writes ignored result artifacts to `test/load/results/`.
