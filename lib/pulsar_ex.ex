@@ -190,6 +190,17 @@ defmodule PulsarEx do
   end
 
   @doc """
+  List the distinct clusters with ready consumers for tenant/namespace/subscription,
+  so callers don't have to know a worker's configured cluster ahead of time
+  """
+  def clusters(tenant, namespace, subscription) do
+    Registry.select(ConsumerReadyRegistry, [
+      {{{:"$1", tenant, namespace, subscription}, :_, :_}, [], [:"$1"]}
+    ])
+    |> Enum.uniq()
+  end
+
+  @doc """
   Desired, active, and ready consumer counts for cluster/tenant/namespace/subscription -
   desired comes from the consumer manager, active/ready from local registries
   """
