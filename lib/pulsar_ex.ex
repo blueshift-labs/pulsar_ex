@@ -190,13 +190,19 @@ defmodule PulsarEx do
   end
 
   @doc """
-  List the distinct clusters with ready consumers for tenant/namespace/subscription,
-  so callers don't have to know a worker's configured cluster ahead of time
+  List the distinct clusters with started consumers for tenant/namespace/subscription,
+  so callers don't have to know a worker's configured cluster ahead of time.
+  Uses ConsumerIDRegistry rather than ConsumerReadyRegistry so a cluster is still
+  discovered while its consumers are down/reconnecting, not just while healthy.
   """
   def clusters(tenant, namespace, subscription) do
-    Registry.select(ConsumerReadyRegistry, [
-      {{{:"$1", tenant, namespace, subscription}, :_, :_}, [], [:"$1"]}
+    Registry.select(ConsumerIDRegistry, [
+      {{{:"$1", :_}, :_, :"$2"}, [], [{{:"$1", :"$2"}}]}
     ])
+    |> Enum.filter(fn {_cluster_name, {_cluster, topic, sub, _consumer_opts}} ->
+      sub == subscription and topic.tenant == tenant and topic.namespace == namespace
+    end)
+    |> Enum.map(fn {cluster_name, _value} -> cluster_name end)
     |> Enum.uniq()
   end
 
