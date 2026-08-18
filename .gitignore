@@ -26,6 +26,9 @@ pulsar_ex-*.tar
 # Temporary files for e.g. tests
 /tmp
 
+# Load harness result artifacts - run evidence, not committed fixtures.
+test/load/results/
+
 tags
 
 .DS_Store

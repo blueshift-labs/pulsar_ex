@@ -120,7 +120,8 @@ defmodule PulsarEx.Consumer do
         ConsumerMessage,
         ConsumerCallback,
         ConsumerRegistry,
-        ConsumerIDRegistry
+        ConsumerIDRegistry,
+        ConsumerReadyRegistry
       }
 
       require Logger
@@ -476,6 +477,12 @@ defmodule PulsarEx.Consumer do
           )
 
           ref = Process.monitor(conn)
+
+          Registry.register(
+            ConsumerReadyRegistry,
+            {cluster_name, topic.tenant, topic.namespace, subscription},
+            nil
+          )
 
           {:noreply,
            %{
@@ -953,6 +960,13 @@ defmodule PulsarEx.Consumer do
 
       defoverridable send_to_dead_letter: 2
 
+      @impl ConsumerCallback
+      def send_to_dead_letter(message, _err, state) do
+        send_to_dead_letter(message, state)
+      end
+
+      defoverridable send_to_dead_letter: 3
+
       # ===================  private  ===================
       defp handle_empty(%{batch: []} = state) do
         handle_flow_permits(state)
@@ -984,8 +998,8 @@ defmodule PulsarEx.Consumer do
             {message, {:ok, _}}, acc ->
               track_ack(message, acc)
 
-            {message, {:non_retriable_error, _}}, acc ->
-              send_to_dead_letter(message, acc)
+            {message, {:non_retriable_error, err}}, acc ->
+              send_to_dead_letter(message, err, acc)
               track_ack(message, acc)
 
             {message, _}, acc ->

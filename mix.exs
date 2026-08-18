@@ -41,19 +41,21 @@ defmodule PulsarEx.MixProject do
 
   defp test_paths(:test), do: ["test/unit"]
   defp test_paths(:integration), do: ["test/integration"]
+  defp test_paths(:load), do: ["test/load"]
   defp test_paths(_), do: ["test"]
 
   defp elixirc_paths(:test), do: ["test/support", "lib"]
   defp elixirc_paths(:integration), do: ["test/support", "lib"]
+  defp elixirc_paths(:load), do: ["test/support", "lib"]
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:telemetry, "~> 1.1"},
-      {:telemetry_metrics, "~> 0.6", only: [:test, :integration]},
-      {:telemetry_metrics_statsd, "~> 0.7", only: [:test, :integration]},
-      {:telemetry_poller, "~> 1.0", only: [:test, :integration]},
+      {:telemetry_metrics, "~> 0.6", only: [:test, :integration, :load]},
+      {:telemetry_metrics_statsd, "~> 0.7", only: [:test, :integration, :load]},
+      {:telemetry_poller, "~> 1.0", only: [:test, :integration, :load]},
       {:nimble_lz4, "~> 0.1.2", optional: true},
       {:hackney, "~> 1.18"},
       {:crc32cer, "0.1.10"},
